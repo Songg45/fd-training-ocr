@@ -158,7 +158,7 @@ ollama_timeout_seconds = 180
 roster_path = "$(ConvertTo-TomlPath $rosterPath)"
 valid_apparatus = ["Engine 54", "Tanker 54", "Brush 54", "Engine 254", "Tanker 854", "Brush 254"]
 valid_locations = ["District", "Pilot FD"]
-location_aliases = { PFD = "Pilot FD", Pilot = "Pilot FD", "Pilot Fire" = "Pilot FD", "Pilot Fire Dep" = "Pilot FD", "Pilot Fire Dept" = "Pilot FD", "Pilot Fire Department" = "Pilot FD", "Pilot FD" = "Pilot FD" }
+location_aliases = { PFD = "Pilot FD", PF0 = "Pilot FD", F0 = "Pilot FD", Pilot = "Pilot FD", "Pilot Fire" = "Pilot FD", "Pilot Fire Dep" = "Pilot FD", "Pilot Fire Dept" = "Pilot FD", "Pilot Fire Department" = "Pilot FD", "Pilot FD" = "Pilot FD" }
 "@
     Write-Utf8NoBom $configPath $configText
 } else { Write-Host "Preserving existing configuration: $configPath" }

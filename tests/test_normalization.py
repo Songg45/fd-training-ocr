@@ -24,9 +24,9 @@ class NormalizationTests(unittest.TestCase):
 
     def test_location_aliases_normalize_to_canonical_value(self):
         aliases = {value:"Pilot FD" for value in
-                   ("PFD", "Pilot", "Pilot Fire", "Pilot Fire Dep", "Pilot Fire Dept",
+                   ("PFD", "PF0", "F0", "Pilot", "Pilot Fire", "Pilot Fire Dep", "Pilot Fire Dept",
                     "Pilot Fire Department", "Pilot FD")}
-        for raw in ("PFD", "pfd", "Pilot", "Pilot Fire", "Pilot Fire Dep",
+        for raw in ("PFD", "pfd", "PF0", "F0", "Pilot", "Pilot Fire", "Pilot Fire Dep",
                     "Pilot Fire Dept", "Pilot Fire Department", "Pilot FD"):
             value = normalize_aliased_allowlisted(
                 raw, ("District", "Pilot FD"), aliases)
