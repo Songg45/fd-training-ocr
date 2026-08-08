@@ -62,13 +62,22 @@ def main(argv=None) -> int:
             self.scale(factor, factor)
 
     class Worker(QtCore.QObject):
-        completed = QtCore.Signal(object)
+        # Use a serialized payload across the thread boundary.  Passing a Python
+        # object through an AutoConnection allowed PySide to invoke the receiver
+        # in the worker thread on Windows, which caused QTextDocument/QTimer
+        # affinity failures when the result widgets were populated.
+        completed = QtCore.Signal(str)
         failed = QtCore.Signal(str)
+
+        def __init__(self, source):
+            super().__init__()
+            self.source = source
 
         @QtCore.Slot()
         def run(self):
             try:
-                self.completed.emit(process_pdf(window.source, build_processor(config, paths)))
+                record = process_pdf(self.source, build_processor(config, paths))
+                self.completed.emit(json.dumps(record, ensure_ascii=False))
             except Exception as exc:
                 self.failed.emit(f"{type(exc).__name__}: {exc}")
 
@@ -125,10 +134,14 @@ def main(argv=None) -> int:
 
         def process(self):
             self.set_busy(True); self.status.setText("Processing locally: Stages 1–2 Qwen2.5-VL, Stage 3 Qwen3-VL…")
-            self.thread = QtCore.QThread(self); worker = Worker(); worker.moveToThread(self.thread)
-            self.thread.started.connect(worker.run); worker.completed.connect(self.finished)
-            worker.failed.connect(self.failed); worker.completed.connect(self.thread.quit)
-            worker.failed.connect(self.thread.quit); self.thread.finished.connect(worker.deleteLater)
+            self.thread = QtCore.QThread(self); worker = Worker(self.source); worker.moveToThread(self.thread)
+            queued = QtCore.Qt.ConnectionType.QueuedConnection
+            self.thread.started.connect(worker.run, queued)
+            worker.completed.connect(self.finished, queued)
+            worker.failed.connect(self.failed, queued)
+            worker.completed.connect(self.thread.quit, queued)
+            worker.failed.connect(self.thread.quit, queued)
+            self.thread.finished.connect(worker.deleteLater)
             self.thread.finished.connect(self.thread.deleteLater); self.thread.worker = worker
             self.thread.start()
 
@@ -138,8 +151,9 @@ def main(argv=None) -> int:
             self.progress.setRange(0, 0 if busy else 1)
             if not busy: self.progress.setValue(1)
 
-        @QtCore.Slot(object)
-        def finished(self, record):
+        @QtCore.Slot(str)
+        def finished(self, payload):
+            record = json.loads(payload)
             self.record = record; self.raw.setPlainText(json.dumps(record, indent=2, ensure_ascii=False))
             rows = structured_rows(record); self.table.setRowCount(len(rows))
             for row, values in enumerate(rows):
