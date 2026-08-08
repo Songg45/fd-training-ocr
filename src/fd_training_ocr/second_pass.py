@@ -189,10 +189,10 @@ def verify_second_pass(page: Image.Image, template: TemplateDefinition,
         prompt = ("Read the handwritten Start time, To/end time, and written Total Hours from this labeled group. "
                   "Times must be HH:MM in 24-hour format and hours numeric. Assess whether the three written values "
                   f"are mathematically consistent; do not change a transcription to force consistency. Stage 1/2 evidence: "
-                  f"{ {name: _stage_pair(first[name]) for name in time_names} }. Return exactly "
-                  '{"start_time":string|null,"end_time":string|null,"total_hours":string|null,'
-                  '"internally_consistent":boolean,"alternatives":{"start_time":string[],"end_time":string[],'
-                  '"total_hours":string[]}}.')
+                  f"{ {name: _stage_pair(first[name]) for name in time_names} }. Return the same shape as this exact "
+                  'example, with scalar quoted values rather than nested objects: {"start_time":"16:00",'
+                  '"end_time":"17:00","total_hours":"2","internally_consistent":false,'
+                  '"alternatives":{"start_time":[],"end_time":[],"total_hours":[]}}.')
         result, attempt = _verify(provider, _request(page, "time_group", "time_group", regions,
                                                      prompt, padding=110))
         calls += len(attempt)
@@ -262,7 +262,8 @@ def verify_second_pass(page: Image.Image, template: TemplateDefinition,
         stage1, stage2 = _stage_pair(item)
         prompt = (f"Independently verify the handwritten value in the labeled {name.replace('_', ' ')} field. "
                   f"Stage 1/2 evidence is {(stage1, stage2)!r}; use the larger labeled image to adjudicate it. "
-                  'Return exactly {"value":string|null,"alternatives":{"value":string[]}}.')
+                  'Return the same shape as this exact example, with a scalar quoted value: '
+                  '{"value":"12/17/25","alternatives":{"value":[]}}.')
         result, attempt = _verify(provider, _request(page, name, "field",
                                                      [template.region(name)], prompt, padding=70))
         calls += len(attempt)

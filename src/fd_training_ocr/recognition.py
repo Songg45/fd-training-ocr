@@ -328,6 +328,9 @@ def parse_context_response(raw: str, request: ContextVerificationRequest,
     values = {key: data[key] for key in value_keys}
     if not all(value is None or isinstance(value, str) for value in values.values()):
         raise RecognitionError("context values must be strings or null")
+    if any(isinstance(value, str) and value.lstrip().startswith(("{", "["))
+           for value in values.values()):
+        raise RecognitionError("context values must be scalar strings, not serialized JSON")
     alternatives = data["alternatives"]
     if not isinstance(alternatives, dict) or set(alternatives) != set(value_keys) or not all(
             isinstance(items, list) and all(isinstance(item, str) for item in items)

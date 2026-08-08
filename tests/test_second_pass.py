@@ -46,6 +46,10 @@ class ContextParserTests(unittest.TestCase):
                    "unexpected": True}
         with self.assertRaises(RecognitionError):
             parse_context_response(json.dumps(payload), request, "mock", "m")
+        payload.pop("unexpected")
+        payload["start_time"] = json.dumps({"value": "16:00"})
+        with self.assertRaisesRegex(RecognitionError, "scalar"):
+            parse_context_response(json.dumps(payload), request, "mock", "m")
 
 
 class SecondPassTests(unittest.TestCase):
