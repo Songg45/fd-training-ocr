@@ -5,7 +5,7 @@ import unittest
 
 from fd_training_ocr.config import AppConfig
 from fd_training_ocr.gui_controller import (GuiPaths, apply_gui_edit, build_processor, display_value,
-                                             export_record, structured_rows, validate_pdf)
+                                             export_record, structured_rows, validate_pdf, validate_pdfs)
 
 
 class GuiControllerTests(unittest.TestCase):
@@ -14,6 +14,13 @@ class GuiControllerTests(unittest.TestCase):
             path = Path(directory) / "form.txt"; path.write_text("x")
             with self.assertRaisesRegex(ValueError, "readable PDF"):
                 validate_pdf(path)
+
+    def test_pdf_selection_preserves_order_and_removes_duplicates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            first = Path(directory) / "first.pdf"; first.write_bytes(b"%PDF")
+            second = Path(directory) / "second.pdf"; second.write_bytes(b"%PDF")
+            self.assertEqual(validate_pdfs([first, second, first]),
+                             (first.resolve(), second.resolve()))
 
     def test_display_value_uses_review_resolution_order(self):
         self.assertEqual(display_value({"raw":"a", "normalized":"b", "resolved_value":"c", "reviewed_value":"d"}), "d")

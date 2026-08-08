@@ -30,6 +30,20 @@ def validate_pdf(path: Path) -> Path:
     return resolved
 
 
+def validate_pdfs(paths: list[Path] | tuple[Path, ...]) -> tuple[Path, ...]:
+    """Validate a GUI selection while preserving order and removing duplicates."""
+    result = []
+    seen = set()
+    for path in paths:
+        resolved = validate_pdf(path)
+        if resolved not in seen:
+            seen.add(resolved)
+            result.append(resolved)
+    if not result:
+        raise ValueError("Select at least one readable PDF file")
+    return tuple(result)
+
+
 def display_value(field: Mapping[str, Any]) -> Any:
     for key in ("reviewed_value", "resolved_value", "normalized", "raw"):
         if field.get(key) is not None:

@@ -87,8 +87,10 @@ contents or its path.
 
 ## Local desktop GUI
 
-The optional PySide6 desktop front end processes one PDF at a time while retaining the
-tested CLI pipeline. It shows a zoomable and pannable page preview on the left and
+The optional PySide6 desktop front end can hold multiple one-page PDFs while retaining the
+tested CLI pipeline. Add PDFs with multi-select, then use Previous/Next and the position
+indicator to paginate between forms; processed results and reviewer edits remain attached
+to each PDF while navigating. It shows a zoomable and pannable page preview on the left and
 editable structured field results plus the complete JSON record on the right. Training
 type, truck, facilities, calculated duration, and Stage-3 resolution status appear as
 read-only summary rows. OCR runs in a background executor while all Qt work remains on
@@ -112,7 +114,8 @@ Stages 1 and 2 use `ollama_model` (`qwen2.5vl:7b` by default); exception-only St
 to loopback. The preview is rendered into a temporary local directory and deleted when the
 window closes. The existing pipeline masks signature regions before retaining aligned
 artifacts or sending crops to Ollama. This checkpoint does not yet highlight source
-regions, process multiple pages/forms, or provide packaging automation.
+regions, process multi-page PDFs as forms, run an optimized unattended batch, or provide
+packaging automation.
 
 Prepare a local master (the output directory is ignored by Git):
 

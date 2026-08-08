@@ -11,7 +11,7 @@ import tempfile
 
 from .config import load_config
 from .gui_controller import (GuiPaths, apply_gui_edit, build_processor, export_record, process_pdf,
-                             structured_rows, validate_pdf)
+                             structured_rows, validate_pdfs)
 from .pdf_render import render_pdf
 
 
@@ -65,11 +65,16 @@ def main(argv=None) -> int:
     class Window(QtWidgets.QMainWindow):
         def __init__(self):
             super().__init__()
+            self.sources = []
+            self.current_index = -1
             self.source = None
             self.record = None
+            self.records = {}
+            self.preview_paths = {}
             self.preview_temp = tempfile.TemporaryDirectory(prefix="fd-training-ocr-gui-")
             self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="fd-ocr")
             self.future: Future | None = None
+            self.busy = False
             self.poll_timer = QtCore.QTimer(self)
             self.poll_timer.setInterval(100)
             self.poll_timer.timeout.connect(self.poll_result)
@@ -78,13 +83,18 @@ def main(argv=None) -> int:
             central = QtWidgets.QWidget(); self.setCentralWidget(central)
             layout = QtWidgets.QVBoxLayout(central)
             controls = QtWidgets.QHBoxLayout(); layout.addLayout(controls)
-            self.load_button = QtWidgets.QPushButton("Load PDF")
+            self.load_button = QtWidgets.QPushButton("Add PDFs")
+            self.previous_button = QtWidgets.QPushButton("Previous")
+            self.next_button = QtWidgets.QPushButton("Next")
+            self.page_label = QtWidgets.QLabel("0 of 0")
             self.process_button = QtWidgets.QPushButton("Process")
             self.export_button = QtWidgets.QPushButton("Export Results")
+            self.previous_button.setEnabled(False); self.next_button.setEnabled(False)
             self.process_button.setEnabled(False); self.export_button.setEnabled(False)
             self.progress = QtWidgets.QProgressBar(); self.progress.setRange(0, 1); self.progress.setValue(0)
             self.status = QtWidgets.QLabel("Load a PDF to begin")
-            for widget in (self.load_button, self.process_button, self.export_button,
+            for widget in (self.load_button, self.previous_button, self.page_label,
+                           self.next_button, self.process_button, self.export_button,
                            self.progress, self.status): controls.addWidget(widget)
             self.warning = QtWidgets.QLabel("")
             self.warning.setStyleSheet("background:#8b1e1e;color:white;font-weight:bold;padding:8px;")
@@ -101,23 +111,66 @@ def main(argv=None) -> int:
             tabs.addTab(self.table, "Structured Results")
             self.raw = QtWidgets.QPlainTextEdit(); self.raw.setReadOnly(True)
             tabs.addTab(self.raw, "Raw JSON")
-            self.load_button.clicked.connect(self.load_pdf)
+            self.load_button.clicked.connect(self.load_pdfs)
+            self.previous_button.clicked.connect(lambda: self.navigate(-1))
+            self.next_button.clicked.connect(lambda: self.navigate(1))
             self.process_button.clicked.connect(self.process)
             self.export_button.clicked.connect(self.export)
 
-        def load_pdf(self):
-            name, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Load training form", "", "PDF files (*.pdf)")
-            if not name: return
+        def load_pdfs(self):
+            names, _ = QtWidgets.QFileDialog.getOpenFileNames(self, "Add training forms", "", "PDF files (*.pdf)")
+            if not names: return
             try:
-                self.source = validate_pdf(Path(name))
-                pages = render_pdf(self.source, Path(self.preview_temp.name), dpi=300,
-                                   pdftoppm=paths.pdftoppm)
-                self.preview.show_image(pages[0].path)
-                self.record = None; self.raw.clear(); self.table.setRowCount(0)
-                self.process_button.setEnabled(True); self.export_button.setEnabled(False)
-                self.warning.hide(); self.status.setText(self.source.name)
+                selected = validate_pdfs([Path(name) for name in names])
+                first_new = None
+                for source in selected:
+                    if source not in self.sources:
+                        self.sources.append(source)
+                        if first_new is None:
+                            first_new = source
+                if first_new is not None:
+                    self.current_index = self.sources.index(first_new)
+                elif self.current_index < 0:
+                    self.current_index = 0
+                self.show_current()
             except Exception as exc:
                 QtWidgets.QMessageBox.critical(self, "Unable to load PDF", str(exc))
+
+        def navigate(self, offset):
+            target = self.current_index + offset
+            if 0 <= target < len(self.sources):
+                self.current_index = target
+                try:
+                    self.show_current()
+                except Exception as exc:
+                    QtWidgets.QMessageBox.critical(self, "Unable to load PDF", str(exc))
+
+        def show_current(self):
+            self.source = self.sources[self.current_index]
+            image_path = self.preview_paths.get(self.source)
+            if image_path is None:
+                preview_dir = Path(self.preview_temp.name) / f"document-{self.current_index + 1}"
+                pages = render_pdf(self.source, preview_dir, dpi=300, pdftoppm=paths.pdftoppm)
+                image_path = pages[0].path
+                self.preview_paths[self.source] = image_path
+            self.preview.show_image(image_path)
+            self.record = self.records.get(self.source)
+            if self.record is None:
+                self.raw.clear(); self.table.setRowCount(0); self.warning.hide()
+                self.status.setText(self.source.name)
+            else:
+                self.display_record(self.record)
+            self.update_navigation()
+
+        def update_navigation(self):
+            count = len(self.sources)
+            position = self.current_index + 1 if count else 0
+            self.page_label.setText(f"{position} of {count}" +
+                                    (f" — {self.source.name}" if self.source else ""))
+            self.previous_button.setEnabled(not self.busy and self.current_index > 0)
+            self.next_button.setEnabled(not self.busy and 0 <= self.current_index < count - 1)
+            self.process_button.setEnabled(not self.busy and self.source is not None)
+            self.export_button.setEnabled(not self.busy and self.record is not None)
 
         def process(self):
             self.set_busy(True); self.status.setText("Processing locally: Stages 1–2 Qwen2.5-VL, Stage 3 Qwen3-VL…")
@@ -138,13 +191,20 @@ def main(argv=None) -> int:
                 self.failed(f"{type(exc).__name__}: {exc}")
 
         def set_busy(self, busy):
-            self.load_button.setEnabled(not busy); self.process_button.setEnabled(not busy and self.source is not None)
-            self.export_button.setEnabled(not busy and self.record is not None)
+            self.busy = busy
+            self.load_button.setEnabled(not busy)
             self.progress.setRange(0, 0 if busy else 1)
             if not busy: self.progress.setValue(1)
+            self.update_navigation()
 
         def finished(self, record):
-            self.record = record; self.raw.setPlainText(json.dumps(record, indent=2, ensure_ascii=False))
+            self.records[self.source] = record
+            self.record = record
+            self.display_record(record)
+            self.set_busy(False)
+
+        def display_record(self, record):
+            self.raw.setPlainText(json.dumps(record, indent=2, ensure_ascii=False))
             rows = structured_rows(record); self.table.blockSignals(True); self.table.setRowCount(len(rows))
             for row, values in enumerate(rows):
                 name, value, warnings, editable = values
