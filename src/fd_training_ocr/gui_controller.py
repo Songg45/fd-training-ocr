@@ -61,18 +61,35 @@ def _counted(value: Any, singular: str) -> str:
     return f"{value} {singular if value == 1 else singular + 's'}"
 
 
+FACILITY_LABELS = {
+    "classroom": "Classroom",
+    "drill_ground": "Drill Ground",
+    "outside_area": "Outside Area",
+}
+
+
+def effective_facilities(event: Mapping[str, Any]) -> Any:
+    reviewed = event.get("reviewed_facilities")
+    return reviewed if reviewed is not None else event.get("facilities")
+
+
 def structured_rows(record: Mapping[str, Any]) -> tuple[tuple[str, str, str, bool], ...]:
     rows = []
     for name, field in record.get("fields", {}).items():
-        warnings = field.get("warnings", ())
+        warnings = [str(item) for item in field.get("warnings", ())]
+        stage3 = field.get("stage_3")
+        if (field.get("second_pass_review_required") and stage3 is not None
+                and str(stage3) != str(display_value(field))):
+            warnings.append(f"Stage 3 suggests: {stage3}")
         rows.append((str(name), "" if display_value(field) is None else str(display_value(field)),
-                     "; ".join(str(item) for item in warnings), True))
+                     "; ".join(warnings), True))
     event = record.get("event", {})
     calculated = event.get("total_hours_calculated")
     rows.extend((
         ("Training type", _labels(event.get("training_types")), "", False),
         ("Truck", _labels(event.get("trucks_used")), "", False),
-        ("Facilities", _labels(event.get("facilities")), "", False),
+        ("Facilities", _labels(effective_facilities(event)),
+         "Double-click to select facilities", False),
         ("Calculated duration", "" if calculated is None else _counted(calculated, "hour"), "", False),
     ))
     stage3_fields = [field for field in record.get("fields", {}).values()
@@ -97,6 +114,21 @@ def apply_gui_edit(record: MutableMapping[str, Any], field_name: str, value: str
     stamp = reviewed_at or datetime.now(timezone.utc).isoformat()
     field["reviewed_value"] = value if value != "" else None
     field["review"] = {"status": "corrected", "reviewed_at": stamp}
+    review = record.setdefault("review", {})
+    review["corrections_applied"] = True
+    review["reviewed_at"] = stamp
+
+
+def apply_facilities_edit(record: MutableMapping[str, Any], facilities: list[str],
+                          reviewed_at: str | None = None) -> None:
+    """Store reviewed facilities separately from the detector's machine result."""
+    invalid = [value for value in facilities if value not in FACILITY_LABELS]
+    if invalid:
+        raise ValueError(f"unknown facilities selection: {', '.join(invalid)}")
+    stamp = reviewed_at or datetime.now(timezone.utc).isoformat()
+    event = record.setdefault("event", {})
+    event["reviewed_facilities"] = list(dict.fromkeys(facilities))
+    event["facilities_review"] = {"status": "corrected", "reviewed_at": stamp}
     review = record.setdefault("review", {})
     review["corrections_applied"] = True
     review["reviewed_at"] = stamp

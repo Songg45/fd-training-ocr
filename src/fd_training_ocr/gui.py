@@ -10,7 +10,8 @@ import sys
 import tempfile
 
 from .config import load_config
-from .gui_controller import (GuiPaths, apply_gui_edit, build_processor, export_record, process_pdf,
+from .gui_controller import (FACILITY_LABELS, GuiPaths, apply_facilities_edit, apply_gui_edit,
+                             build_processor, effective_facilities, export_record, process_pdf,
                              structured_rows, validate_pdfs)
 from .pdf_render import render_pdf
 
@@ -108,6 +109,7 @@ def main(argv=None) -> int:
             self.table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.DoubleClicked |
                                        QtWidgets.QAbstractItemView.EditTrigger.EditKeyPressed)
             self.table.itemChanged.connect(self.result_edited)
+            self.table.cellDoubleClicked.connect(self.summary_activated)
             tabs.addTab(self.table, "Structured Results")
             self.raw = QtWidgets.QPlainTextEdit(); self.raw.setReadOnly(True)
             tabs.addTab(self.raw, "Raw JSON")
@@ -211,10 +213,10 @@ def main(argv=None) -> int:
                 for column, text in enumerate((name, value, warnings)):
                     item = QtWidgets.QTableWidgetItem(text)
                     item.setToolTip(text)
+                    if column == 1:
+                        item.setData(QtCore.Qt.ItemDataRole.UserRole, name)
                     if column != 1 or not editable:
                         item.setFlags(item.flags() & ~QtCore.Qt.ItemFlag.ItemIsEditable)
-                    elif editable:
-                        item.setData(QtCore.Qt.ItemDataRole.UserRole, name)
                     self.table.setItem(row, column, item)
             self.table.blockSignals(False)
             needs_review = record.get("status") == "review_required"
@@ -228,6 +230,8 @@ def main(argv=None) -> int:
             field_name = item.data(QtCore.Qt.ItemDataRole.UserRole)
             if not field_name:
                 return
+            if field_name == "Facilities":
+                return
             try:
                 apply_gui_edit(self.record, str(field_name), item.text())
                 self.raw.setPlainText(json.dumps(self.record, indent=2, ensure_ascii=False))
@@ -235,6 +239,33 @@ def main(argv=None) -> int:
                 self.export_button.setEnabled(True)
             except ValueError as exc:
                 QtWidgets.QMessageBox.critical(self, "Invalid correction", str(exc))
+
+        def summary_activated(self, row, column):
+            item = self.table.item(row, 1)
+            if self.record is None or item is None or item.data(QtCore.Qt.ItemDataRole.UserRole) != "Facilities":
+                return
+            event = self.record.get("event", {})
+            selected = set(effective_facilities(event) or ())
+            dialog = QtWidgets.QDialog(self)
+            dialog.setWindowTitle("Select Facilities")
+            layout = QtWidgets.QVBoxLayout(dialog)
+            checks = {}
+            for key, label in FACILITY_LABELS.items():
+                check = QtWidgets.QCheckBox(label)
+                check.setChecked(key in selected)
+                checks[key] = check
+                layout.addWidget(check)
+            buttons = QtWidgets.QDialogButtonBox(
+                QtWidgets.QDialogButtonBox.StandardButton.Ok |
+                QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+            buttons.accepted.connect(dialog.accept); buttons.rejected.connect(dialog.reject)
+            layout.addWidget(buttons)
+            if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+                return
+            apply_facilities_edit(self.record, [key for key, check in checks.items() if check.isChecked()])
+            self.display_record(self.record)
+            self.status.setText("Edited Facilities; machine result preserved")
+            self.export_button.setEnabled(True)
 
         @QtCore.Slot(str)
         def failed(self, message):

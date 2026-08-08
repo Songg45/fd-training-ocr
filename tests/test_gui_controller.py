@@ -4,7 +4,8 @@ import tempfile
 import unittest
 
 from fd_training_ocr.config import AppConfig
-from fd_training_ocr.gui_controller import (GuiPaths, apply_gui_edit, build_processor, display_value,
+from fd_training_ocr.gui_controller import (GuiPaths, apply_facilities_edit, apply_gui_edit,
+                                             build_processor, display_value, effective_facilities,
                                              export_record, structured_rows, validate_pdf, validate_pdfs)
 
 
@@ -36,7 +37,7 @@ class GuiControllerTests(unittest.TestCase):
         self.assertEqual(rows[0], ("date", "12/17/25", "check date", True))
         self.assertIn(("Training type", "New Driver", "", False), rows)
         self.assertIn(("Truck", "Brush 54", "", False), rows)
-        self.assertIn(("Facilities", "None selected", "", False), rows)
+        self.assertIn(("Facilities", "None selected", "Double-click to select facilities", False), rows)
         self.assertIn(("Calculated duration", "1.0 hour", "", False), rows)
         self.assertIn(("Stage 3 resolution", "1 call; 1 field resolved; 0 unresolved", "", False), rows)
 
@@ -50,6 +51,22 @@ class GuiControllerTests(unittest.TestCase):
         self.assertEqual(record["fields"]["instructor"]["reviewed_value"], "Nicholas Sledge")
         self.assertEqual(record["fields"]["instructor"]["review"],
                          {"status":"corrected", "reviewed_at":"2026-08-08T12:00:00Z"})
+        self.assertTrue(record["review"]["corrections_applied"])
+
+    def test_unresolved_stage3_suggestion_is_shown_in_warnings(self):
+        rows = structured_rows({"fields":{"description":{"raw":"system", "normalized":"system",
+            "warnings":["recognizer supplied alternatives"], "stage_3":"Fire/Res Safety",
+            "second_pass_review_required":True}}, "event":{}})
+        self.assertEqual(rows[0], ("description", "system",
+            "recognizer supplied alternatives; Stage 3 suggests: Fire/Res Safety", True))
+
+    def test_facilities_edit_preserves_machine_result(self):
+        record = {"event":{"facilities":[]},
+                  "review":{"corrections_applied":False, "reviewed_at":None}}
+        apply_facilities_edit(record, ["classroom", "outside_area"], "2026-08-08T12:00:00Z")
+        self.assertEqual(record["event"]["facilities"], [])
+        self.assertEqual(record["event"]["reviewed_facilities"], ["classroom", "outside_area"])
+        self.assertEqual(effective_facilities(record["event"]), ["classroom", "outside_area"])
         self.assertTrue(record["review"]["corrections_applied"])
 
     def test_export_writes_exact_json_record(self):
