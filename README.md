@@ -4,8 +4,9 @@ A local-first pipeline for extracting auditable, structured data from standardiz
 
 ## Current status
 
-Checkpoint 6 adds conservative normalization, deterministic validation, external roster
-matching, and local review artifacts. It does **not** implement production export or batch operation.
+Checkpoint 7 is a release candidate with idempotent file/folder processing, detailed JSON,
+normalized events/attendees CSV files, isolated machine-readable failures, batch summaries,
+and field-type evaluation. Deployment and production-archive processing remain unapproved.
 
 ## Requirements
 
@@ -56,10 +57,24 @@ shows only non-signature crops and downloads corrections as a separate timestamp
 ```powershell
 fd-training-ocr --help
 fd-training-ocr --config config.local.toml inspect-config
-fd-training-ocr process path\to\form.pdf
+fd-training-ocr process path\to\form.pdf --master path\to\cleaned-master.png `
+  --template templates\pilot_fd_training_sign_in\v1\template.json
 ```
 
-The `process` command intentionally exits with a clear “not implemented” message until later checkpoints. Template preparation is available only through the explicit command below.
+`process` accepts one PDF or a non-recursive directory of PDFs. It hashes source bytes with
+SHA-256 and stores one record per hash, so identical input is skipped even if renamed. One
+bad form creates an error JSON without stopping the rest. Exit codes are `0` for success,
+`3` when at least one new record requires review, and `2` for processing/configuration
+failure. The default mock provider is offline and intentionally yields review-required
+records; pass `--provider ollama` only for an approved local recognition run.
+
+Each batch output contains `records/*.json`, `errors/*.json`, `events.csv`,
+`attendees.csv`, and `batch-summary.json`. Detailed fields retain raw, normalized, and
+reviewed values plus confidence, alternatives, provider/model, source bounding box,
+warnings, and review provenance. Signature fields are rejected at the export boundary.
+The optional external roster remains outside Git; if configured but missing or invalid,
+processing continues conservatively and marks the record for review without logging roster
+contents or its path.
 
 Prepare a local master (the output directory is ignored by Git):
 
