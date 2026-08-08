@@ -4,9 +4,9 @@ A local-first pipeline for extracting auditable, structured data from standardiz
 
 ## Current status
 
-Checkpoint 4 adds localized option scoring, attendee-row occupancy based only on unit ID and
-print-name cells, and optional printed-rule suppression. It does **not** perform OCR,
-recognition, normalization, validation, export, or send data to external services.
+Checkpoint 5 adds provider-neutral, crop-level handwriting recognition, a deterministic
+offline mock, and an optional local Ollama vision provider. It does **not** normalize,
+validate, export, or send data to hosted services.
 
 ## Requirements
 
@@ -31,6 +31,9 @@ output_dir = "output"
 template_dir = "templates"
 log_level = "INFO"
 offline = true
+ollama_endpoint = "http://127.0.0.1:11434"
+ollama_model = "qwen2.5vl:7b"
+ollama_timeout_seconds = 90
 ```
 
 Pass a file with `--config config.local.toml`. Local configuration, PDFs, outputs, logs, databases, crops, and signatures are ignored by Git.
@@ -81,6 +84,20 @@ fd-training-ocr detect output\alignment\aligned.png `
 
 The command writes per-region scores plus ignored option and row diagnostic overlays.
 Signature regions are never cropped, scored, detected, validated, exported, or processed.
+
+## Optional local Ollama recognition
+
+Ollama is not required for installation or tests. To try it, install Ollama separately,
+start its local service, and pull a compact vision model suitable for the deployment PC's
+8 GB VRAM ceiling. The default adapter model is `qwen2.5vl:7b`, which uses nearly the full
+8 GB budget; `qwen2.5vl:3b` remains the lower-memory fallback. Model availability and
+handwriting quality must be verified locally before operational use. The endpoint, model,
+and timeout are constructor-configurable. Only loopback endpoints are accepted, and only
+tightly cropped non-signature fields are serialized to the API. Requests are sequential;
+the adapter uses deterministic temperature and strict JSON parsing.
+
+An opt-in smoke test is available with `FD_OCR_LIVE_OLLAMA=1`; optionally set
+`FD_OCR_OLLAMA_MODEL`. It skips with setup guidance if the service/model is unavailable.
 
 ## Offline tests
 

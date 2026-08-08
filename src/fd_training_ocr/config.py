@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional
 import tomllib
+from urllib.parse import urlsplit
 
 
 @dataclass(frozen=True)
@@ -14,6 +15,9 @@ class AppConfig:
     template_dir: Path = Path("templates")
     log_level: str = "INFO"
     offline: bool = True
+    ollama_endpoint: str = "http://127.0.0.1:11434"
+    ollama_model: str = "qwen2.5vl:7b"
+    ollama_timeout_seconds: float = 90.0
 
     def as_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -23,7 +27,8 @@ class AppConfig:
 
 
 def _build_config(values: Mapping[str, Any]) -> AppConfig:
-    allowed = {"output_dir", "template_dir", "log_level", "offline"}
+    allowed = {"output_dir", "template_dir", "log_level", "offline",
+               "ollama_endpoint", "ollama_model", "ollama_timeout_seconds"}
     unknown = set(values) - allowed
     if unknown:
         raise ValueError(f"Unknown app configuration key(s): {', '.join(sorted(unknown))}")
@@ -34,12 +39,25 @@ def _build_config(values: Mapping[str, Any]) -> AppConfig:
         raise ValueError("app.log_level must be a string")
     if not isinstance(offline, bool):
         raise ValueError("app.offline must be a boolean")
+    endpoint = values.get("ollama_endpoint", "http://127.0.0.1:11434")
+    model = values.get("ollama_model", "qwen2.5vl:7b")
+    timeout = values.get("ollama_timeout_seconds", 90.0)
+    parsed_endpoint = urlsplit(endpoint) if isinstance(endpoint, str) else None
+    if parsed_endpoint is None or parsed_endpoint.scheme != "http" or parsed_endpoint.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        raise ValueError("app.ollama_endpoint must be a loopback HTTP URL")
+    if not isinstance(model, str) or not model.strip():
+        raise ValueError("app.ollama_model must be a non-empty string")
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
+        raise ValueError("app.ollama_timeout_seconds must be positive")
 
     return AppConfig(
         output_dir=Path(values.get("output_dir", "output")),
         template_dir=Path(values.get("template_dir", "templates")),
         log_level=log_level.upper(),
         offline=offline,
+        ollama_endpoint=endpoint,
+        ollama_model=model,
+        ollama_timeout_seconds=float(timeout),
     )
 
 
