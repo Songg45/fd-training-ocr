@@ -21,7 +21,7 @@ from .gui_controller import (EVENT_SELECTIONS, GuiPaths, accept_stage3_suggestio
                              attendee_row_from_field, remove_attendee, roster_table_rows,
                              add_attendee, first_available_attendee_row, save_roster_table,
                              stage3_suggestion, unprocessed_sources,
-                             validate_pdfs)
+                             validate_pdfs, alignment_fallback_record)
 from .pdf_render import render_pdf
 
 
@@ -767,6 +767,25 @@ def main(argv=None) -> int:
                 QtWidgets.QMessageBox.critical(self, "Unable to save correction", str(exc))
 
         def failed(self, source, message):
+            if source is not None and message.startswith("AlignmentError:"):
+                record = alignment_fallback_record(source, message)
+                automatic_export(record, args.export_dir)
+                self.records[source] = record
+                self.failures.pop(source, None)
+                self.persist_state()
+                if source == self.source:
+                    self.record = record
+                    self.display_record(record)
+                if self.batch_total:
+                    self.batch_completed += 1
+                    self.batch_failures += 1
+                    self.progress.setValue(self.batch_completed)
+                    self.process_next_batch_item()
+                else:
+                    self.processing_source = None
+                    self.set_busy(False)
+                    self.status.setText("Alignment failed — manual field template created")
+                return
             self.failures[source] = message
             self.persist_state()
             if self.batch_total:

@@ -18,8 +18,10 @@ from fd_training_ocr.gui_controller import (GuiPaths, accept_stage3_suggestion, 
                                              attendee_row_from_field, remove_attendee,
                                              first_available_attendee_row,
                                              stage3_suggestion,
+                                             alignment_fallback_record,
                                              roster_table_rows, save_roster_table,
                                              validate_pdf, validate_pdfs)
+
 
 
 class GuiControllerTests(unittest.TestCase):
@@ -92,6 +94,30 @@ class GuiControllerTests(unittest.TestCase):
                   "review":{"corrections_applied":False, "reviewed_at":None}}
         apply_gui_edit(record, "date", "12/1/2025", "2026-08-08T12:00:00Z")
         self.assertEqual(record["fields"]["date"]["reviewed_value"], "12/01/25")
+
+    def test_alignment_failure_creates_editable_manual_template(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "legacy.pdf"
+            source.write_bytes(b"%PDF manual fallback")
+            record = alignment_fallback_record(source, "AlignmentError: unsafe")
+        self.assertEqual(record["form_version"], "manual_alignment_fallback")
+        self.assertEqual(record["status"], "review_required")
+        rows = {name: (value, editable) for name, value, _, editable
+                in structured_rows(record)}
+        for name in ("date", "start_time", "end_time", "location", "total_hours",
+                     "instructor", "attendee.01.unit_id", "attendee.01.print_name",
+                     "attendee.02.unit_id", "attendee.02.print_name", "description"):
+            self.assertEqual(rows[name], ("", True))
+        self.assertEqual(rows["Calculated duration"], ("", False))
+
+    def test_manual_time_edits_recalculate_duration(self):
+        record = {"fields": {
+            "start_time": {"reviewed_value": None},
+            "end_time": {"reviewed_value": None}}, "event": {}, "review": {}}
+        apply_gui_edit(record, "start_time", "18:00", "2026-08-08T12:00:00Z")
+        self.assertIsNone(record["event"]["total_hours_calculated"])
+        apply_gui_edit(record, "end_time", "22:00", "2026-08-08T12:01:00Z")
+        self.assertEqual(record["event"]["total_hours_calculated"], 4.0)
 
     def test_unit_id_edit_updates_attendee_name_from_exact_roster_match(self):
         with tempfile.TemporaryDirectory() as directory:

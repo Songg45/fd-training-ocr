@@ -166,6 +166,59 @@ def structured_rows(record: Mapping[str, Any]) -> tuple[tuple[str, str, str, boo
     return tuple(rows)
 
 
+def alignment_fallback_record(source: Path, failure: str) -> dict[str, Any]:
+    """Create an editable manual-entry record when safe OCR alignment fails."""
+    stamp = datetime.now(timezone.utc).isoformat()
+
+    def field() -> dict[str, Any]:
+        return {"raw": None, "normalized": None, "reviewed_value": None,
+                "confidence": 0.0, "alternatives": [], "provider": "manual",
+                "model": None, "source_region": None,
+                "warnings": ["manual entry required because alignment failed"],
+                "review": {"status": "unreviewed", "reviewed_at": None},
+                "resolved_value": None, "stage_3": None,
+                "second_pass_review_required": False}
+
+    fields = {name: field() for name in (
+        "date", "start_time", "end_time", "location", "total_hours", "instructor",
+        "attendee.01.unit_id", "attendee.01.print_name",
+        "attendee.02.unit_id", "attendee.02.print_name", "description")}
+    return {
+        "source_file": source.name,
+        "source_sha256": source_sha256(source),
+        "page": 1,
+        "form_type": "pilot_fd_training_sign_in",
+        "form_version": "manual_alignment_fallback",
+        "status": "review_required",
+        "fields": fields,
+        "event": {"total_hours_calculated": None, "training_types": [],
+                  "facilities": [], "trucks_used": [], "second_pass_call_count": 0},
+        "attendees": [{"row": 1, "unit_id": None, "print_name": None},
+                      {"row": 2, "unit_id": None, "print_name": None}],
+        "warnings": [failure, "OCR was not run; complete the manual field template"],
+        "review": {"status": "pending", "corrections_applied": False,
+                   "reviewed_at": stamp, "alignment_fallback": True},
+    }
+
+
+def _recalculate_duration(record: MutableMapping[str, Any]) -> None:
+    fields = record.get("fields", {})
+    if not isinstance(fields, Mapping):
+        return
+    start_field, end_field = fields.get("start_time"), fields.get("end_time")
+    start_value = display_value(start_field) if isinstance(start_field, Mapping) else None
+    end_value = display_value(end_field) if isinstance(end_field, Mapping) else None
+    calculated = None
+    try:
+        start = datetime.strptime(str(start_value), "%H:%M")
+        end = datetime.strptime(str(end_value), "%H:%M")
+        if end >= start:
+            calculated = (end - start).total_seconds() / 3600
+    except (TypeError, ValueError):
+        pass
+    record.setdefault("event", {})["total_hours_calculated"] = calculated
+
+
 def apply_gui_edit(record: MutableMapping[str, Any], field_name: str, value: str,
                    reviewed_at: str | None = None) -> None:
     """Store a GUI correction separately without changing machine evidence."""
@@ -186,6 +239,20 @@ def apply_gui_edit(record: MutableMapping[str, Any], field_name: str, value: str
     review = record.setdefault("review", {})
     review["corrections_applied"] = True
     review["reviewed_at"] = stamp
+    attendee_match = re.fullmatch(r"attendee\.(\d+)\.(unit_id|print_name)", field_name)
+    if attendee_match:
+        row, key = int(attendee_match.group(1)), attendee_match.group(2)
+        attendees = list(record.get("attendees", ()))
+        attendee = next((item for item in attendees
+                         if isinstance(item, MutableMapping) and item.get("row") == row), None)
+        if attendee is None:
+            attendee = {"row": row, "unit_id": None, "print_name": None}
+            attendees.append(attendee)
+        attendee[key] = value if value else None
+        attendees.sort(key=lambda item: int(item.get("row", 0)))
+        record["attendees"] = attendees
+    if field_name in {"start_time", "end_time"}:
+        _recalculate_duration(record)
 
 
 def apply_roster_linked_unit_edit(record: MutableMapping[str, Any], field_name: str,
