@@ -117,6 +117,27 @@ artifacts or sending crops to Ollama. This checkpoint does not yet highlight sou
 regions, process multi-page PDFs as forms, run an optimized unattended batch, or provide
 packaging automation.
 
+## Station PC installer
+
+The idempotent PowerShell installer provisions a Windows 10 22H2-or-newer station with
+Git, Python 3.12, Poppler, Ollama, the GUI environment, both local OCR models, an external
+configuration and roster, and a desktop shortcut. WinGet verifies the package manifests
+and installer hashes. Existing configuration and roster files are preserved.
+
+Copy the repository or just `scripts\Install-FDTrainingOCR.ps1` to the station, open
+PowerShell, and run:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\Install-FDTrainingOCR.ps1 -RunTests
+```
+
+Defaults install the repository at `C:\Github\fd-training-ocr` and local operational data
+under `C:\Temp`. Use `-InstallRoot` or `-DataRoot` to change them. Model downloads require
+about 12 GB; the installer requires at least 25 GB free for the complete environment.
+Use `-SkipModels` only when models will be transferred or pulled separately. The script
+does not install GPU drivers; install a current NVIDIA driver if `nvidia-smi` is absent.
+
 Prepare a local master (the output directory is ignored by Git):
 
 ```powershell
