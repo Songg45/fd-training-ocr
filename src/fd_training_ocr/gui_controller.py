@@ -215,6 +215,55 @@ def remove_attendee(record: MutableMapping[str, Any], row: int,
     review["reviewed_at"] = stamp
 
 
+def first_available_attendee_row(record: Mapping[str, Any], maximum: int = 19) -> int | None:
+    fields = record.get("fields", {})
+    occupied = {attendee_row_from_field(str(name)) for name in fields}
+    occupied.discard(None)
+    attendees = record.get("attendees", ())
+    if isinstance(attendees, (list, tuple)):
+        occupied.update(int(item["row"]) for item in attendees
+                        if isinstance(item, Mapping) and isinstance(item.get("row"), int))
+    return next((row for row in range(1, maximum + 1) if row not in occupied), None)
+
+
+def add_attendee(record: MutableMapping[str, Any], row: int, unit_id: str, print_name: str,
+                 reviewed_at: str | None = None, maximum: int = 19) -> None:
+    """Add a manually reviewed attendee to an unused form row."""
+    unit_id = unit_id.strip()
+    print_name = print_name.strip()
+    if not 1 <= row <= maximum:
+        raise ValueError(f"attendee row must be between 1 and {maximum}")
+    if not unit_id or not print_name:
+        raise ValueError("an added attendee requires both Unit ID and Print Name")
+    fields = record.setdefault("fields", {})
+    if not isinstance(fields, MutableMapping):
+        raise ValueError("record has no editable fields")
+    prefix = f"attendee.{row:02d}"
+    attendees = list(record.get("attendees", ()))
+    if (any(str(name).startswith(prefix + ".") for name in fields)
+            or any(isinstance(item, Mapping) and item.get("row") == row for item in attendees)):
+        raise ValueError(f"attendee row {row} is already occupied")
+    stamp = reviewed_at or datetime.now(timezone.utc).isoformat()
+
+    def manual_field(value: str) -> dict[str, Any]:
+        return {"raw": None, "normalized": None, "reviewed_value": value,
+                "confidence": 1.0, "alternatives": [], "provider": "manual",
+                "model": None, "source_region": None, "warnings": [],
+                "review": {"status": "corrected", "reviewed_at": stamp},
+                "resolved_value": None, "second_pass_review_required": False}
+
+    fields[prefix + ".unit_id"] = manual_field(unit_id)
+    fields[prefix + ".print_name"] = manual_field(print_name)
+    attendee = {"row": row, "unit_id": unit_id, "print_name": print_name}
+    attendees.append(attendee)
+    attendees.sort(key=lambda item: int(item.get("row", 0)) if isinstance(item, Mapping) else 0)
+    record["attendees"] = attendees
+    review = record.setdefault("review", {})
+    review.setdefault("added_attendees", []).append({**attendee, "reviewed_at": stamp})
+    review["corrections_applied"] = True
+    review["reviewed_at"] = stamp
+
+
 def apply_facilities_edit(record: MutableMapping[str, Any], facilities: list[str],
                           reviewed_at: str | None = None) -> None:
     """Store reviewed facilities separately from the detector's machine result."""

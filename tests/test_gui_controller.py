@@ -4,14 +4,15 @@ import tempfile
 import unittest
 
 from fd_training_ocr.config import AppConfig
-from fd_training_ocr.gui_controller import (GuiPaths, apply_event_selection, apply_facilities_edit,
-                                             apply_gui_edit,
+from fd_training_ocr.gui_controller import (GuiPaths, add_attendee, apply_event_selection,
+                                             apply_facilities_edit, apply_gui_edit,
                                              automatic_export, automatic_export_stem,
                                              build_processor, display_value, effective_event_selection,
                                              effective_facilities,
                                              discover_pdfs, export_record, index_after_removal, structured_rows,
                                              load_gui_state, save_gui_state, unprocessed_sources,
                                              attendee_row_from_field, remove_attendee,
+                                             first_available_attendee_row,
                                              roster_table_rows, save_roster_table,
                                              validate_pdf, validate_pdfs)
 
@@ -103,6 +104,29 @@ class GuiControllerTests(unittest.TestCase):
         self.assertEqual(attendee_row_from_field("attendee.09.print_name"), 9)
         self.assertEqual(attendee_row_from_field("attendee.19.unit_id"), 19)
         self.assertIsNone(attendee_row_from_field("description"))
+
+    def test_attendee_addition_uses_open_row_and_preserves_manual_audit(self):
+        record = {"fields":{"attendee.01.unit_id":{"raw":"4554"},
+                            "attendee.01.print_name":{"raw":"Brandon Tucker"}},
+                  "attendees":[{"row":1, "unit_id":"4554",
+                                "print_name":"Brandon Tucker Sr"}],
+                  "review":{"corrections_applied":False, "reviewed_at":None}}
+        self.assertEqual(first_available_attendee_row(record), 2)
+        add_attendee(record, 2, "4354", "Nick Sledge", "2026-08-08T12:00:00Z")
+        self.assertEqual(record["fields"]["attendee.02.unit_id"]["reviewed_value"], "4354")
+        self.assertEqual(record["fields"]["attendee.02.print_name"]["reviewed_value"], "Nick Sledge")
+        self.assertEqual(record["attendees"][1],
+                         {"row":2, "unit_id":"4354", "print_name":"Nick Sledge"})
+        self.assertEqual(record["review"]["added_attendees"][0]["row"], 2)
+        self.assertTrue(record["review"]["corrections_applied"])
+
+    def test_attendee_addition_rejects_occupied_or_incomplete_rows(self):
+        record = {"fields":{}, "attendees":[{"row":1, "unit_id":"4554",
+                                               "print_name":"Brandon Tucker Sr"}]}
+        with self.assertRaisesRegex(ValueError, "occupied"):
+            add_attendee(record, 1, "4354", "Nick Sledge")
+        with self.assertRaisesRegex(ValueError, "requires both"):
+            add_attendee(record, 2, "", "Nick Sledge")
 
     def test_unresolved_stage3_suggestion_is_shown_in_warnings(self):
         rows = structured_rows({"fields":{"description":{"raw":"system", "normalized":"system",

@@ -15,7 +15,8 @@ from .gui_controller import (EVENT_SELECTIONS, GuiPaths, apply_event_selection, 
                              export_record, load_gui_state, process_pdf, save_gui_state,
                              discover_pdfs, index_after_removal, structured_rows,
                              attendee_row_from_field, remove_attendee, roster_table_rows,
-                             save_roster_table, unprocessed_sources,
+                             add_attendee, first_available_attendee_row, save_roster_table,
+                             unprocessed_sources,
                              validate_pdfs)
 from .pdf_render import render_pdf
 
@@ -109,19 +110,22 @@ def main(argv=None) -> int:
             self.process_all_button = QtWidgets.QPushButton("Process All")
             self.stop_button = QtWidgets.QPushButton("Stop After Current")
             self.delete_attendee_button = QtWidgets.QPushButton("Delete Attendee")
+            self.add_attendee_button = QtWidgets.QPushButton("Add Attendee")
             self.export_button = QtWidgets.QPushButton("Export Results")
             self.remove_button.setEnabled(False)
             self.previous_button.setEnabled(False); self.next_button.setEnabled(False)
             self.process_button.setEnabled(False); self.process_all_button.setEnabled(False)
             self.stop_button.setEnabled(False); self.export_button.setEnabled(False)
             self.delete_attendee_button.setEnabled(False)
+            self.add_attendee_button.setEnabled(False)
             self.progress = QtWidgets.QProgressBar(); self.progress.setRange(0, 1); self.progress.setValue(0)
             self.status = QtWidgets.QLabel("Load a PDF to begin")
             for widget in (self.load_button, self.folder_button, self.roster_button,
                            self.remove_button,
                            self.previous_button, self.page_label,
                            self.next_button, self.process_button, self.process_all_button,
-                           self.stop_button, self.delete_attendee_button, self.export_button,
+                           self.stop_button, self.add_attendee_button,
+                           self.delete_attendee_button, self.export_button,
                            self.progress, self.status): controls.addWidget(widget)
             self.warning = QtWidgets.QLabel("")
             self.warning.setStyleSheet("background:#8b1e1e;color:white;font-weight:bold;padding:8px;")
@@ -150,6 +154,7 @@ def main(argv=None) -> int:
             self.process_all_button.clicked.connect(self.process_all)
             self.stop_button.clicked.connect(self.request_stop)
             self.delete_attendee_button.clicked.connect(self.delete_selected_attendee)
+            self.add_attendee_button.clicked.connect(self.add_attendee_dialog)
             self.export_button.clicked.connect(self.export)
             self.restore_state()
 
@@ -383,7 +388,59 @@ def main(argv=None) -> int:
             self.stop_button.setEnabled(
                 self.busy and self.batch_total > 0 and not self.stop_requested)
             self.export_button.setEnabled(not self.busy and self.record is not None)
+            self.add_attendee_button.setEnabled(not self.busy and self.record is not None)
             self.update_attendee_button()
+
+        def add_attendee_dialog(self):
+            if self.record is None:
+                return
+            available = first_available_attendee_row(self.record)
+            if available is None:
+                QtWidgets.QMessageBox.information(
+                    self, "Attendee rows full", "All 19 attendee rows are occupied.")
+                return
+            dialog = QtWidgets.QDialog(self)
+            dialog.setWindowTitle("Add Attendee")
+            form = QtWidgets.QFormLayout(dialog)
+            roster_combo = QtWidgets.QComboBox()
+            roster_combo.addItem("Custom entry…", None)
+            try:
+                if config.roster_path is not None:
+                    for name, unit_ids, aliases in roster_table_rows(config.roster_path, Path.cwd()):
+                        for unit_id in [item.strip() for item in unit_ids.split(",") if item.strip()]:
+                            roster_combo.addItem(f"{name} — {unit_id}", (name, unit_id))
+            except (OSError, ValueError):
+                pass
+            row_box = QtWidgets.QSpinBox(); row_box.setRange(1, 19); row_box.setValue(available)
+            unit_edit = QtWidgets.QLineEdit()
+            name_edit = QtWidgets.QLineEdit()
+            form.addRow("Roster", roster_combo)
+            form.addRow("Form row", row_box)
+            form.addRow("Unit ID", unit_edit)
+            form.addRow("Print Name", name_edit)
+            buttons = QtWidgets.QDialogButtonBox(
+                QtWidgets.QDialogButtonBox.StandardButton.Ok |
+                QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+            form.addRow(buttons)
+
+            def roster_selected(index):
+                selection = roster_combo.itemData(index)
+                if selection:
+                    name_edit.setText(selection[0]); unit_edit.setText(selection[1])
+
+            roster_combo.currentIndexChanged.connect(roster_selected)
+            buttons.accepted.connect(dialog.accept); buttons.rejected.connect(dialog.reject)
+            if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+                return
+            try:
+                add_attendee(self.record, row_box.value(), unit_edit.text(), name_edit.text())
+                automatic_export(self.record, args.export_dir)
+                self.persist_state()
+                self.display_record(self.record)
+                self.status.setText(
+                    f"Added attendee row {row_box.value()}; automatic export updated")
+            except (OSError, ValueError) as exc:
+                QtWidgets.QMessageBox.critical(self, "Unable to add attendee", str(exc))
 
         def selected_attendee_row(self):
             row = self.table.currentRow()
