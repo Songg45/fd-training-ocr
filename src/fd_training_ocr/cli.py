@@ -91,6 +91,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             processor = processor_factory(work_dir=destination / "work", master_path=args.master,
                 template_path=args.template, provider=provider, repository_root=Path.cwd(),
                 roster_path=config.roster_path, pdftoppm=args.pdftoppm,
+                recognition_crop_padding=config.recognition_crop_padding_pixels,
+                recognition_max_attempts=config.recognition_max_attempts,
                 policy=ValidationPolicy(apparatus=config.valid_apparatus, locations=config.valid_locations))
             summary = run_batch(args.source, destination, processor)
         except (OSError, ValueError, TemplateError) as exc:

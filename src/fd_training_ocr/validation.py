@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from difflib import SequenceMatcher
 import json
 from pathlib import Path
 from typing import Iterable, Mapping
@@ -33,6 +34,25 @@ class Roster:
 
     def valid_unit(self, raw: str) -> bool:
         return any(raw.strip().casefold() == unit.casefold() for m in self.members for unit in m.unit_ids)
+
+    def suggest_name(self, raw: str, threshold: float = .72) -> tuple[str | None, bool, str | None]:
+        scored = []
+        for member in self.members:
+            score = max(SequenceMatcher(None, raw.strip().casefold(), candidate.casefold()).ratio()
+                        for candidate in (member.name, *member.aliases))
+            if score >= threshold: scored.append((score, member.name))
+        scored.sort(reverse=True)
+        if not scored: return None, False, "no sufficiently similar roster name"
+        ambiguous = len(scored) > 1 and scored[0][0] - scored[1][0] < .08
+        return scored[0][1], ambiguous, ("multiple similar roster names" if ambiguous else "similar roster spelling")
+
+    def suggest_unit(self, raw: str, threshold: float = .60) -> tuple[str | None, bool, str | None]:
+        candidates = [(SequenceMatcher(None, raw.strip().casefold(), unit.casefold()).ratio(), unit)
+                      for member in self.members for unit in member.unit_ids]
+        candidates = sorted((item for item in candidates if item[0] >= threshold), reverse=True)
+        if not candidates: return None, False, "no sufficiently similar roster unit ID"
+        ambiguous = len(candidates) > 1 and candidates[0][0] - candidates[1][0] < .08
+        return candidates[0][1], ambiguous, ("multiple similar roster unit IDs" if ambiguous else "similar roster unit ID")
 
 
 def load_roster(path: Path, repository_root: Path) -> Roster:
@@ -76,6 +96,9 @@ class FieldAssessment:
     alternatives: tuple[str, ...]
     warnings: tuple[str, ...]
     review_required: bool
+    suggested_canonical: str | None = None
+    suggestion_ambiguous: bool = False
+    suggestion_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -94,7 +117,7 @@ def _normalize(result: RecognitionResult, roster: Roster | None, policy: Validat
     if result.field_name == "location": return normalize_allowlisted(value, policy.locations)
     if result.field_name.endswith(".print_name") and value and roster:
         match, _ = roster.match_name(value)
-        return NormalizedValue(value, match or value.strip(), match is not None, None if match else "name not found uniquely in roster")
+        return NormalizedValue(value, value.strip(), match is not None, None if match else "name not found uniquely in roster")
     if result.field_name.endswith(".unit_id") and value and roster:
         return NormalizedValue(value, value.strip(), roster.valid_unit(value), None if roster.valid_unit(value) else "unit ID not found in roster")
     return NormalizedValue(value, value.strip() if value else None, bool(value and value.strip()), None if value and value.strip() else "value is blank")
@@ -109,7 +132,20 @@ def validate(results: Iterable[RecognitionResult], *, roster: Roster | None = No
         threshold = policy.confidence_thresholds.get(result.field_name, policy.confidence_thresholds.get(result.field_name.rsplit(".", 1)[-1], policy.confidence_thresholds["default"]))
         if result.confidence < threshold: warnings.append(f"confidence {result.confidence:.2f} is below {threshold:.2f}")
         if result.alternatives: warnings.append("recognizer supplied alternatives")
-        assessments.append(FieldAssessment(result.field_name, normalized.raw, normalized.normalized, result.confidence, result.alternatives, tuple(warnings), bool(warnings)))
+        suggestion, ambiguous, reason = None, False, None
+        if roster and result.value and result.field_name.endswith(".print_name"):
+            exact, _ = roster.match_name(result.value)
+            suggestion, ambiguous, reason = ((exact, False, "exact roster name or alias") if exact
+                                               else roster.suggest_name(result.value))
+        elif roster and result.value and result.field_name.endswith(".unit_id"):
+            suggestion, ambiguous, reason = ((result.value.strip(), False, "exact roster unit ID")
+                if roster.valid_unit(result.value) else roster.suggest_unit(result.value))
+        if suggestion and suggestion != (result.value or "").strip():
+            warnings.append("roster suggestion available; raw OCR was preserved")
+        if ambiguous: warnings.append("roster suggestion is ambiguous")
+        assessments.append(FieldAssessment(result.field_name, normalized.raw, normalized.normalized,
+            result.confidence, result.alternatives, tuple(warnings), bool(warnings),
+            suggestion, ambiguous, reason))
     by_name = {a.field_name: a for a in assessments}
     calculated = None
     start, end = by_name.get("start_time"), by_name.get("end_time")

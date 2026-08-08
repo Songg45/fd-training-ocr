@@ -21,6 +21,8 @@ class AppConfig:
     roster_path: Path | None = None
     valid_apparatus: tuple[str, ...] = ("Engine 54", "Tanker 54", "Brush 54", "Engine 254", "Tanker 854", "Brush 254")
     valid_locations: tuple[str, ...] = ("District",)
+    recognition_crop_padding_pixels: int = 12
+    recognition_max_attempts: int = 3
 
     def as_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -33,7 +35,8 @@ class AppConfig:
 def _build_config(values: Mapping[str, Any]) -> AppConfig:
     allowed = {"output_dir", "template_dir", "log_level", "offline",
                "ollama_endpoint", "ollama_model", "ollama_timeout_seconds", "roster_path",
-               "valid_apparatus", "valid_locations"}
+               "valid_apparatus", "valid_locations", "recognition_crop_padding_pixels",
+               "recognition_max_attempts"}
     unknown = set(values) - allowed
     if unknown:
         raise ValueError(f"Unknown app configuration key(s): {', '.join(sorted(unknown))}")
@@ -63,6 +66,12 @@ def _build_config(values: Mapping[str, Any]) -> AppConfig:
         raise ValueError("app.valid_apparatus must be a nonempty array of strings")
     if not isinstance(locations, list) or not locations or not all(isinstance(x, str) and x.strip() for x in locations):
         raise ValueError("app.valid_locations must be a nonempty array of strings")
+    crop_padding = values.get("recognition_crop_padding_pixels", 12)
+    max_attempts = values.get("recognition_max_attempts", 3)
+    if isinstance(crop_padding, bool) or not isinstance(crop_padding, int) or not 0 <= crop_padding <= 100:
+        raise ValueError("app.recognition_crop_padding_pixels must be an integer from 0 to 100")
+    if isinstance(max_attempts, bool) or not isinstance(max_attempts, int) or not 1 <= max_attempts <= 3:
+        raise ValueError("app.recognition_max_attempts must be an integer from 1 to 3")
 
     return AppConfig(
         output_dir=Path(values.get("output_dir", "output")),
@@ -75,6 +84,8 @@ def _build_config(values: Mapping[str, Any]) -> AppConfig:
         roster_path=Path(roster_path) if roster_path else None,
         valid_apparatus=tuple(apparatus),
         valid_locations=tuple(locations),
+        recognition_crop_padding_pixels=crop_padding,
+        recognition_max_attempts=max_attempts,
     )
 
 

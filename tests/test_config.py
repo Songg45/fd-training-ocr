@@ -26,6 +26,13 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.ollama_model, "vision:3b")
         self.assertEqual(config.ollama_timeout_seconds, 15.0)
 
+    def test_loads_bounded_recognition_crop_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.toml"
+            path.write_text('[app]\nrecognition_crop_padding_pixels=20\nrecognition_max_attempts=2\n', encoding="utf-8")
+            config = load_config(path)
+        self.assertEqual((config.recognition_crop_padding_pixels, config.recognition_max_attempts), (20, 2))
+
     def test_rejects_unknown_keys(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.toml"

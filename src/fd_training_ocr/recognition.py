@@ -6,15 +6,17 @@ recognized values; those operations belong to Checkpoint 6.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from io import BytesIO
 import base64
 import json
+import re
 from typing import Callable, Mapping, Protocol, Sequence
 from urllib.error import URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
+import numpy as np
 from PIL import Image
 
 from .table_extraction import suppress_printed_rules
@@ -32,6 +34,8 @@ class RecognitionRequest:
     prompt: str
     image: Image.Image
     source_region: tuple[int, int, int, int]
+    variant: str = "raw"
+    attempt: int = 1
 
 
 @dataclass(frozen=True)
@@ -45,6 +49,8 @@ class RecognitionResult:
     provider: str
     model: str
     source_region: tuple[int, int, int, int]
+    variant: str = "raw"
+    attempts: tuple[dict[str, object], ...] = ()
 
 
 class RecognitionProvider(Protocol):
@@ -55,12 +61,13 @@ class RecognitionProvider(Protocol):
 
 
 _PROMPTS = {
-    "date": "Transcribe only the handwritten date. Preserve its written format.",
-    "time": "Transcribe only the handwritten time. Preserve its written format.",
-    "hours": "Transcribe only the handwritten total-hours value.",
-    "unit_id": "Transcribe only the handwritten fire department unit ID.",
-    "print_name": "Transcribe only the handwritten printed attendee name.",
-    "name": "Transcribe only the handwritten person's name.",
+    "date": "Transcribe only the handwritten date. Expected format: MM/DD/YY (or MM/DD/YYYY). Do not read the printed Date label.",
+    "time": "Transcribe only the handwritten time. Expected format: HH:MM using the 24-hour clock. Do not read Start, To, or other printed labels.",
+    "hours": "Transcribe only the handwritten total-hours value. Return a numeric value only, without words or units.",
+    "unit_id": "Transcribe only the handwritten fire department unit ID. It is an alphanumeric roster identifier; preserve every digit and any leading zero.",
+    "print_name": "Transcribe only the handwritten printed attendee name. Preserve spelling and suffixes; do not infer a roster match.",
+    "name": "Transcribe only the handwritten person's name. Preserve spelling; do not infer a roster match.",
+    "location": "Transcribe only the handwritten location value. Do not read the printed Location label.",
     "short_text": "Transcribe only the handwritten text in this field.",
     "description": "Transcribe only the handwritten training description.",
 }
@@ -71,30 +78,66 @@ def field_type(region: Region) -> str:
     if region.name in {"start_time", "end_time"}: return "time"
     if region.name == "total_hours": return "hours"
     if region.name == "instructor": return "name"
+    if region.name == "location": return "location"
     if region.name == "description": return "description"
     if region.name.endswith(".unit_id"): return "unit_id"
     if region.name.endswith(".print_name"): return "print_name"
     return "short_text"
 
 
+def _expanded_box(box: tuple[int, int, int, int], size: tuple[int, int], pixels: int
+                  ) -> tuple[int, int, int, int]:
+    left, top, right, bottom = box; width, height = size
+    return (max(0, left - pixels), max(0, top - pixels),
+            min(width, right + pixels), min(height, bottom + pixels))
+
+
+def _padded(image: Image.Image, pixels: int) -> Image.Image:
+    if pixels <= 0: return image
+    canvas = Image.new("L", (image.width + 2 * pixels, image.height + 2 * pixels), 255)
+    canvas.paste(image, (pixels, pixels))
+    return canvas
+
+
+def _suppression_preserves_ink(master: Image.Image, raw: Image.Image,
+                               suppressed: Image.Image, minimum: float = .82) -> bool:
+    """Require rule suppression to retain most ink newly present versus the master."""
+    from .checkbox_detection import difference_mask
+    expected = difference_mask(master, raw)
+    expected_count = int(expected.sum())
+    if expected_count == 0: return False
+    retained_mask = np.asarray(suppressed.convert("L")) < 190
+    return float((retained_mask & expected).sum()) / expected_count >= minimum
+
+
 def make_request(page: Image.Image, region: Region,
-                 master: Image.Image | None = None) -> RecognitionRequest:
+                 master: Image.Image | None = None, *, padding: int = 12,
+                 expand: int = 0, force_variant: str | None = None,
+                 attempt: int = 1, stronger: bool = False) -> RecognitionRequest:
     """Crop one eligible field and construct its field-specific request."""
     if region.kind == "signature" or region.name.endswith(".signature"):
         raise RecognitionError("signature regions are never cropped or recognized")
     if region.kind not in {"text", "attendee_cell"}:
         raise RecognitionError(f"region {region.name!r} is not a handwriting field")
-    box = region.pixel_box(*page.size)
-    crop = page.crop(box).convert("L")
+    box = _expanded_box(region.pixel_box(*page.size), page.size, expand)
+    raw = page.crop(box).convert("L")
+    crop, variant = raw, "raw"
     if master is not None:
         if master.size != page.size:
             raise RecognitionError("master and completed page sizes differ")
-        crop = suppress_printed_rules(master.crop(box).convert("L"), crop)
+        master_crop = master.crop(box).convert("L")
+        suppressed = suppress_printed_rules(master_crop, raw)
+        if force_variant == "suppressed" or (force_variant is None and
+                _suppression_preserves_ink(master_crop, raw, suppressed)):
+            crop, variant = suppressed, "suppressed"
+    if force_variant == "raw": crop, variant = raw, "raw"
+    crop = _padded(crop, padding)
     kind = field_type(region)
-    prompt = (_PROMPTS[kind] + " Return one JSON object with exactly these keys: "
+    reinforcement = " Treat any output outside the expected format as invalid; inspect each character again." if stronger else ""
+    prompt = (_PROMPTS[kind] + reinforcement + " Return one JSON object with exactly these keys: "
               '"value" (string or null), "confidence" (0 to 1), and '
               '"alternatives" (array of strings). Do not infer missing text.')
-    return RecognitionRequest(region.name, kind, prompt, crop, box)
+    return RecognitionRequest(region.name, kind, prompt, crop, box, variant, attempt)
 
 
 def parse_response(raw: str, request: RecognitionRequest, provider: str,
@@ -115,7 +158,27 @@ def parse_response(raw: str, request: RecognitionRequest, provider: str,
         raise RecognitionError("response alternatives must be an array of strings")
     return RecognitionResult(request.field_name, value, value, float(confidence),
                              tuple(alternatives), raw, provider, model,
-                             request.source_region)
+                             request.source_region, request.variant)
+
+
+def _acceptable(result: RecognitionResult) -> bool:
+    if result.value is None or result.confidence < .85: return False
+    text = result.value.strip()
+    patterns = {
+        "date": r"\d{1,2}/\d{1,2}/(?:\d{2}|\d{4})",
+        "time": r"(?:[01]?\d|2[0-3]):[0-5]\d",
+        "hours": r"\d+(?:\.\d+)?",
+        "unit_id": r"[A-Za-z0-9-]+",
+    }
+    return bool(re.fullmatch(patterns.get(result.field_name if result.field_name in patterns else
+        result.field_name.rsplit(".", 1)[-1], r".+"), text))
+
+
+def _attempt_record(result: RecognitionResult, request: RecognitionRequest) -> dict[str, object]:
+    return {"attempt": request.attempt, "variant": request.variant,
+            "source_region": list(request.source_region), "value": result.value,
+            "confidence": result.confidence, "alternatives": list(result.alternatives),
+            "raw_output": result.raw_output}
 
 
 class MockRecognitionProvider:
@@ -180,7 +243,8 @@ class OllamaVisionProvider:
 
 def recognize_fields(page: Image.Image, master: Image.Image,
                      template: TemplateDefinition, provider: RecognitionProvider,
-                     populated_rows: Sequence[int] = ()) -> tuple[RecognitionResult, ...]:
+                     populated_rows: Sequence[int] = (), *, crop_padding: int = 12,
+                     max_attempts: int = 3) -> tuple[RecognitionResult, ...]:
     """Recognize text fields and the two non-signature cells of populated rows."""
     populated = set(populated_rows)
     results = []
@@ -191,5 +255,18 @@ def recognize_fields(page: Image.Image, master: Image.Image,
             continue
         if region.kind not in {"text", "attendee_cell"}:
             continue
-        results.append(provider.recognize(make_request(page, region, master)))
+        attempts: list[dict[str, object]] = []
+        result = None
+        # Initial objective variant, followed by raw and wider raw context. Requests stay sequential.
+        specifications = ((None, crop_padding, 0, False),
+                          ("raw", crop_padding + 4, 0, True),
+                          ("raw", crop_padding + 8, 10, True))
+        for number, (variant, padding, expand, stronger) in enumerate(specifications[:max_attempts], 1):
+            request = make_request(page, region, master, padding=padding, expand=expand,
+                                   force_variant=variant, attempt=number, stronger=stronger)
+            result = provider.recognize(request)
+            attempts.append(_attempt_record(result, request))
+            if _acceptable(result): break
+        assert result is not None
+        results.append(replace(result, attempts=tuple(attempts)))
     return tuple(results)

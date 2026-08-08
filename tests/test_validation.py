@@ -19,7 +19,21 @@ class RosterTests(unittest.TestCase):
             roster = load_roster(roster_path, root)
             report = validate([result("attendee.01.print_name", "S. Member"), result("attendee.01.unit_id", "X001")], roster=roster)
             field = report.fields[0]
-            self.assertEqual((field.raw, field.normalized), ("S. Member", "Synthetic Member"))
+            self.assertEqual((field.raw, field.normalized), ("S. Member", "S. Member"))
+            self.assertEqual(field.suggested_canonical, "Synthetic Member")
+
+    def test_fuzzy_roster_suggestions_never_replace_raw_and_report_ambiguity(self):
+        from fd_training_ocr.validation import Roster, RosterMember
+        roster = Roster((RosterMember("Synthetic Member", ("4554",)),
+                         RosterMember("Synthetica Member", ("4354",))))
+        report = validate([result("attendee.01.print_name", "Syntheti Member"),
+                           result("attendee.01.unit_id", "455")], roster=roster)
+        name, unit = report.fields
+        self.assertEqual(name.normalized, "Syntheti Member")
+        self.assertTrue(name.suggestion_ambiguous)
+        self.assertIsNotNone(name.suggested_canonical)
+        self.assertEqual(unit.normalized, "455")
+        self.assertEqual(unit.suggested_canonical, "4554")
 
     def test_rejects_repo_local_and_malformed_rosters(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -37,6 +37,8 @@ ollama_timeout_seconds = 90
 roster_path = "C:\\Temp\\fd-training-ocr-roster.json"
 valid_apparatus = ["Engine 54", "Tanker 54", "Brush 54", "Engine 254", "Tanker 854", "Brush 254"]
 valid_locations = ["District"]
+recognition_crop_padding_pixels = 12
+recognition_max_attempts = 3
 ```
 
 Pass a file with `--config config.local.toml`. Local configuration, PDFs, outputs, logs, databases, crops, and signatures are ignored by Git.
@@ -123,6 +125,14 @@ handwriting quality must be verified locally before operational use. The endpoin
 and timeout are constructor-configurable. Only loopback endpoints are accepted, and only
 tightly cropped non-signature fields are serialized to the API. Requests are sequential;
 the adapter uses deterministic temperature and strict JSON parsing.
+
+Each eligible field produces raw-grayscale and printed-rule-suppressed candidates.
+Suppression is selected only when a measured ink-preservation threshold passes. Crops
+receive a white border, and invalid or low-confidence structured results are retried
+sequentially with raw and then wider raw context (three attempts maximum). Detailed JSON
+records preserve the chosen variant and every attempt. Roster matching is non-destructive:
+raw OCR remains machine output while a canonical suggestion, ambiguity flag, and reason
+are exposed for human review.
 
 An opt-in smoke test is available with `FD_OCR_LIVE_OLLAMA=1`; optionally set
 `FD_OCR_OLLAMA_MODEL`. It skips with setup guidance if the service/model is unavailable.

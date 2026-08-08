@@ -27,17 +27,20 @@ class RecognitionTests(unittest.TestCase):
         self.page = Image.new("L", (100, 100), 255)
 
     def test_mock_is_deterministic_and_preserves_metadata(self):
-        provider = MockRecognitionProvider({"date": {"value": "12/17/25", "confidence": .82,
+        provider = MockRecognitionProvider({"date": {"value": "12/17/25", "confidence": .92,
                                                       "alternatives": ["12/11/25"]}})
         result = recognize_fields(self.page, self.page, template(), provider)[0]
         self.assertEqual(result.value, result.normalized_as_returned)
         self.assertEqual(result.alternatives, ("12/11/25",))
         self.assertEqual((result.provider, result.model), ("mock", "deterministic-fixture-v1"))
         self.assertEqual(result.source_region, (10, 10, 30, 20))
-        self.assertEqual(result.raw_output, '{"alternatives":["12/11/25"],"confidence":0.82,"value":"12/17/25"}')
+        self.assertEqual(result.raw_output, '{"alternatives":["12/11/25"],"confidence":0.92,"value":"12/17/25"}')
 
     def test_attendee_cells_are_separate_and_empty_rows_skipped(self):
-        provider = MockRecognitionProvider()
+        responses = {name: {"value": "x", "confidence": .99, "alternatives": []}
+                     for name in ("date", "attendee.01.unit_id", "attendee.01.print_name")}
+        responses["date"]["value"] = "01/02/26"
+        provider = MockRecognitionProvider(responses)
         recognize_fields(self.page, self.page, template(), provider, populated_rows=[1])
         self.assertEqual([r.field_name for r in provider.requests],
                          ["date", "attendee.01.unit_id", "attendee.01.print_name"])
@@ -74,6 +77,34 @@ class RecognitionTests(unittest.TestCase):
     def test_remote_ollama_endpoint_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "must be local"):
             OllamaVisionProvider(endpoint="https://example.com")
+
+    def test_crop_is_white_padded_without_changing_source_box(self):
+        request = make_request(self.page, template().region("date"), padding=7,
+                               force_variant="raw")
+        self.assertEqual(request.source_region, (10, 10, 30, 20))
+        self.assertEqual(request.image.size, (34, 24))
+        self.assertEqual(request.image.getpixel((0, 0)), 255)
+
+    def test_suppression_falls_back_to_raw_when_no_new_ink_is_preserved(self):
+        request = make_request(self.page, template().region("date"), self.page,
+                               force_variant=None)
+        self.assertEqual(request.variant, "raw")
+
+    def test_invalid_format_retries_sequentially_and_preserves_attempts(self):
+        class SequenceProvider:
+            name, model = "sequence", "test"
+            def __init__(self): self.requests = []
+            def recognize(self, request):
+                self.requests.append(request)
+                value = "not-a-date" if len(self.requests) < 3 else "01/02/26"
+                return parse_response(json.dumps({"value": value, "confidence": .99,
+                    "alternatives": []}), request, self.name, self.model)
+        provider = SequenceProvider()
+        result = recognize_fields(self.page, self.page, template(), provider)[0]
+        self.assertEqual(result.value, "01/02/26")
+        self.assertEqual([x.attempt for x in provider.requests], [1, 2, 3])
+        self.assertEqual([x["variant"] for x in result.attempts], ["raw", "raw", "raw"])
+        self.assertGreater(provider.requests[2].image.width, provider.requests[1].image.width)
 
 
 if __name__ == "__main__":
