@@ -86,6 +86,12 @@ def _deterministically_consistent(values: Mapping[str, str | None]) -> bool:
     return abs((b - a).total_seconds() / 3600 - float(hours.normalized)) <= .05
 
 
+def _time_pair_valid(values: Mapping[str, str | None]) -> bool:
+    start, end = normalize_time(values.get("start_time")), normalize_time(values.get("end_time"))
+    if not (start.valid and end.valid): return False
+    return datetime.strptime(end.normalized, "%H:%M") >= datetime.strptime(start.normalized, "%H:%M")
+
+
 def _candidate_for(field: str, assessment: FieldAssessment | None, roster: Roster | None) -> str | None:
     if assessment and assessment.suggested_canonical and not assessment.suggestion_ambiguous:
         return assessment.suggested_canonical
@@ -139,10 +145,12 @@ def verify_second_pass(page: Image.Image, template: TemplateDefinition,
                                                      prompt, padding=110))
         calls += 1
         values = result.values if result else {name: None for name in time_names}
-        deterministic = bool(result and result.internally_consistent and _deterministically_consistent(values))
+        group_deterministic = bool(result and result.internally_consistent and
+                                   _deterministically_consistent(values))
+        pair_deterministic = bool(result and _time_pair_valid(values))
         for name in time_names:
             resolutions[name] = _resolve(name, first[name].value, values[name], None,
-                                         attempt, deterministic=deterministic)
+                attempt, deterministic=pair_deterministic if name != "total_hours" else group_deterministic)
 
     instructor = assessments.get("instructor")
     instructor_candidate = _candidate_for("instructor", instructor, roster)

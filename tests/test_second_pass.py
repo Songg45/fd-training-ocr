@@ -71,6 +71,20 @@ class SecondPassTests(unittest.TestCase):
         attempt = verified.resolutions["start_time"].attempts[0]
         self.assertEqual((attempt["provider"], attempt["model"]), ("mock", "deterministic-fixture-v1"))
 
+    def test_time_pair_can_resolve_while_written_hours_remain_inconsistent(self):
+        first = (result("start_time", "16:20"), result("end_time", "7:00"),
+                 result("total_hours", "2"))
+        report = validate(first)
+        provider = MockRecognitionProvider(context_responses={"time_group": {
+            "start_time": "16:00", "end_time": "17:00", "total_hours": "2",
+            "internally_consistent": False,
+            "alternatives": {"start_time": [], "end_time": [], "total_hours": []}}})
+        verified = verify_second_pass(Image.new("L", (1000, 1000), 255), template(), provider,
+                                      first, report)
+        self.assertEqual(verified.resolutions["start_time"].resolved_value, "16:00")
+        self.assertEqual(verified.resolutions["end_time"].resolved_value, "17:00")
+        self.assertEqual(verified.resolutions["total_hours"].resolved_value, "2")
+
     def test_roster_and_context_resolve_instructor_and_row_without_overwriting_first_pass(self):
         roster = Roster((RosterMember("Nick Sledge", ("4354",), ()),))
         first = (result("instructor", "Nick Sledar"), result("attendee.01.unit_id", "U354"),

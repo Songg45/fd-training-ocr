@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Callable
 
@@ -63,10 +63,17 @@ def processor_factory(*, work_dir: Path, master_path: Path, template_path: Path,
             crop_padding=recognition_crop_padding, max_attempts=recognition_max_attempts)
         apparatus_map = {"truck.engine54":"Engine 54", "truck.tanker54":"Tanker 54", "truck.engine254":"Engine 254", "truck.brush54":"Brush 54", "truck.tanker854":"Tanker 854"}
         apparatus = [apparatus_map[x] for x in selected if x in apparatus_map]
-        report = validate(recognized, roster=roster, selected_apparatus=apparatus, policy=policy)
-        second_pass = verify_second_pass(page, definition, provider, recognized, report, roster)
+        first_report = validate(recognized, roster=roster, selected_apparatus=apparatus, policy=policy)
+        second_pass = verify_second_pass(page, definition, provider, recognized, first_report, roster)
+        effective = tuple(replace(item, value=second_pass.resolutions[item.field_name].resolved_value,
+                                  normalized_as_returned=second_pass.resolutions[item.field_name].resolved_value)
+            if item.field_name in second_pass.resolutions and
+               second_pass.resolutions[item.field_name].resolved_value is not None else item
+            for item in recognized)
+        report = validate(effective, roster=roster, selected_apparatus=apparatus, policy=policy)
         fields = {}
         by_assessment = {x.field_name: x for x in report.fields}
+        by_first_assessment = {x.field_name: x for x in first_report.fields}
         for item in recognized:
             assessment = by_assessment[item.field_name]
             fields[item.field_name] = {"raw": item.value, "normalized": assessment.normalized,
@@ -76,12 +83,15 @@ def processor_factory(*, work_dir: Path, master_path: Path, template_path: Path,
                 "suggested_canonical": assessment.suggested_canonical,
                 "suggestion_ambiguous": assessment.suggestion_ambiguous,
                 "suggestion_reason": assessment.suggestion_reason,
-                "warnings": list(assessment.warnings), "review": {"status": "unreviewed", "reviewed_at": None}}
+                "warnings": list(assessment.warnings),
+                "first_pass_warnings": list(by_first_assessment[item.field_name].warnings),
+                "review": {"status": "unreviewed", "reviewed_at": None}}
             resolution = second_pass.resolutions.get(item.field_name)
             fields[item.field_name].update({
                 "first_pass": item.value,
                 "second_pass": resolution.second_pass if resolution else None,
                 "second_pass_attempts": list(resolution.attempts) if resolution else [],
+                "roster_suggestion": resolution.roster_suggestion if resolution else assessment.suggested_canonical,
                 "resolved_value": resolution.resolved_value if resolution else None,
                 "resolution_reason": resolution.resolution_reason if resolution else None,
                 "second_pass_review_required": resolution.review_required if resolution else False,
@@ -97,14 +107,8 @@ def processor_factory(*, work_dir: Path, master_path: Path, template_path: Path,
         unresolved_second_pass = any(item.review_required for item in second_pass.resolutions.values())
         # A resolved Pass-2 field clears only that field's warnings. Global contradictions
         # remain review-required unless the complete time group validates deterministically.
-        unresolved_first_pass = any(a.review_required and
-            (a.field_name not in second_pass.resolutions or second_pass.resolutions[a.field_name].review_required)
-            for a in report.fields)
+        unresolved_first_pass = any(a.review_required for a in report.fields)
         unresolved_globals = bool(report.warnings)
-        if all(name in second_pass.resolutions and not second_pass.resolutions[name].review_required
-               for name in ("start_time", "end_time", "total_hours")):
-            unresolved_globals = any("duration" not in warning and "time" not in warning
-                                     for warning in report.warnings)
         review_required = unresolved_first_pass or unresolved_second_pass or unresolved_globals or bool(roster_warning)
         event = {"total_hours_calculated": report.total_hours_calculated,
             "training_types": [x.removeprefix("training_type.") for x in selected if x.startswith("training_type.")],
