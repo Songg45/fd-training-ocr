@@ -10,7 +10,10 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Proprietary" }
 authors = [{ name = "Songg45" }]
-dependencies = []
+dependencies = [
+  "numpy>=1.26",
+  "Pillow>=10.2",
+]
 
 [project.scripts]
 fd-training-ocr = "fd_training_ocr.cli:main"

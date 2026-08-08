@@ -9,6 +9,18 @@ import sys
 from typing import Optional, Sequence
 
 from .config import load_config
+from .pdf_render import PdfRenderError, render_pdf
+from .preprocessing import prepare_template
+
+
+def _normalized_rectangle(value: str) -> tuple[float, float, float, float]:
+    try:
+        rectangle = tuple(float(part) for part in value.split(","))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("expected x,y,width,height") from exc
+    if len(rectangle) != 4:
+        raise argparse.ArgumentTypeError("expected x,y,width,height")
+    return rectangle  # type: ignore[return-value]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -18,6 +30,13 @@ def build_parser() -> argparse.ArgumentParser:
     subcommands.add_parser("inspect-config", help="Print effective non-secret configuration")
     process = subcommands.add_parser("process", help="Process one PDF or directory (future checkpoint)")
     process.add_argument("source", type=Path)
+    prepare = subcommands.add_parser("prepare-template", help="Render and clean page 1 of a blank form")
+    prepare.add_argument("source", type=Path)
+    prepare.add_argument("--output-dir", type=Path)
+    prepare.add_argument("--pdftoppm", type=Path)
+    prepare.add_argument("--dpi", type=int, default=300)
+    prepare.add_argument("--stray-mark", type=_normalized_rectangle, action="append", default=[],
+                         help="Normalized x,y,width,height region containing a pen mark")
     return parser
 
 
@@ -38,6 +57,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             file=sys.stderr,
         )
         return 2
+    if args.command == "prepare-template":
+        destination = args.output_dir or config.output_dir / "template-preparation"
+        try:
+            rendered = render_pdf(args.source, destination / "rendered", dpi=args.dpi,
+                                  pdftoppm=args.pdftoppm)
+            result = prepare_template(rendered[0].path, destination,
+                                      stray_mark_regions=args.stray_mark)
+        except (OSError, ValueError, PdfRenderError) as exc:
+            print(f"Template preparation failed: {exc}", file=sys.stderr)
+            return 1
+        print(json.dumps({"cleaned_master": str(result.cleaned_path),
+                          "diagnostics": str(result.diagnostics_path),
+                          "deskew_angle_degrees": round(result.angle_degrees, 3),
+                          "crop_box": result.crop_box}, indent=2))
+        return 0
     parser.error(f"Unknown command: {args.command}")
     return 2
 

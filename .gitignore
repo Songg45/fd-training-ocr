@@ -6,6 +6,8 @@ output/*
 **/crops/
 **/signatures/
 **/review-artifacts/
+tmp/
+**/template-preparation/
 *.pdf
 
 # Local data, logs, credentials, and configuration overrides

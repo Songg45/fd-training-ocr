@@ -4,12 +4,12 @@ A local-first pipeline for extracting auditable, structured data from standardiz
 
 ## Current status
 
-Checkpoint 1 provides the project scaffold, configuration loader, CLI shell, and offline tests. It does **not** render PDFs, inspect forms, perform OCR, or send data to external services.
+Checkpoint 2 adds local first-page PDF rendering and deterministic blank-template preparation. It does **not** align completed forms, define fields, perform OCR, or send data to external services.
 
 ## Requirements
 
 - Python 3.11 or newer (Python 3.12 recommended)
-- No runtime dependencies for Checkpoint 1
+- Poppler (`pdftoppm`), supplied by the bundled Codex workspace runtime or installed locally
 
 ## Install for development
 
@@ -41,11 +41,24 @@ fd-training-ocr --config config.local.toml inspect-config
 fd-training-ocr process path\to\form.pdf
 ```
 
-The `process` command intentionally exits with a clear “not implemented” message until later checkpoints. It never reads or modifies the supplied PDF in Checkpoint 1.
+The `process` command intentionally exits with a clear “not implemented” message until later checkpoints. Template preparation is available only through the explicit command below.
+
+Prepare a local master (the output directory is ignored by Git):
+
+```powershell
+fd-training-ocr prepare-template path\to\blank.pdf --pdftoppm path\to\pdftoppm.exe
+```
+
+The command renders page 1 at 300 DPI, rotates it 180 degrees, estimates and corrects
+small skew, crops the page, normalizes contrast, removes isolated speckles, and writes
+both `cleaned-master.png` and `preparation-diagnostics.png`. The input PDF is never modified.
+For a known stray pen stroke, repeat `--stray-mark x,y,width,height` with normalized
+page coordinates. Only short strokes inside that local region are cleared; long table
+rules are retained. These form-specific values stay in local invocation/configuration.
 
 ## Offline tests
 
-Tests use only Python's standard library and synthetic temporary files:
+Tests run offline with NumPy, Pillow, and synthetic temporary files:
 
 ```powershell
 python -m unittest discover -s tests -v
