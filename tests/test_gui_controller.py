@@ -7,6 +7,7 @@ from fd_training_ocr.config import AppConfig
 from fd_training_ocr.gui_controller import (GuiPaths, accept_stage3_suggestion, add_attendee,
                                              apply_event_selection,
                                              apply_facilities_edit, apply_gui_edit,
+                                             apply_roster_linked_unit_edit,
                                              automatic_export, automatic_export_stem,
                                              build_processor, display_value, effective_event_selection,
                                              effective_facilities,
@@ -83,6 +84,33 @@ class GuiControllerTests(unittest.TestCase):
         self.assertEqual(record["fields"]["instructor"]["review"],
                          {"status":"corrected", "reviewed_at":"2026-08-08T12:00:00Z"})
         self.assertTrue(record["review"]["corrections_applied"])
+
+    def test_unit_id_edit_updates_attendee_name_from_exact_roster_match(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = root / "repo"; repository.mkdir()
+            roster_path = root / "roster.json"
+            roster_path.write_text(json.dumps({
+                "schema_version": 1,
+                "members": [{"name": "Diane Brown", "unit_ids": ["6854"], "aliases": []}],
+            }), encoding="utf-8")
+            record = {
+                "fields": {
+                    "attendee.03.unit_id": {"raw": "G854", "reviewed_value": None},
+                    "attendee.03.print_name": {"raw": "Vigne Starnos", "reviewed_value": None},
+                },
+                "attendees": [{"row": 3, "unit_id": "G854", "print_name": "Vigne Starnos"}],
+                "review": {"corrections_applied": False, "reviewed_at": None},
+            }
+            matched = apply_roster_linked_unit_edit(
+                record, "attendee.03.unit_id", "6854", roster_path, repository,
+                "2026-08-08T12:00:00Z")
+            self.assertEqual(matched, "Diane Brown")
+            self.assertEqual(record["fields"]["attendee.03.unit_id"]["reviewed_value"], "6854")
+            self.assertEqual(record["fields"]["attendee.03.print_name"]["reviewed_value"],
+                             "Diane Brown")
+            self.assertEqual(record["attendees"][0],
+                             {"row": 3, "unit_id": "6854", "print_name": "Diane Brown"})
 
     def test_attendee_deletion_removes_active_values_and_preserves_audit(self):
         unit = {"raw":"4554", "normalized":"4554"}

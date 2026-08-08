@@ -46,8 +46,14 @@ def score_option(master: Image.Image, completed: Image.Image, region: Region,
     changed = difference_mask(master_crop, completed_crop)
     ratio = float(changed.mean())
     added = float(_ink(completed_crop).mean() - _ink(master_crop).mean())
+    # Apparatus blanks sit among heavy printed labels and rules. Requiring a
+    # localized difference as well as net added ink prevents a globally darker
+    # scan from becoming a truck selection.
+    selected = added >= threshold
+    if region.name.startswith("truck."):
+        selected = selected and ratio >= .045
     return OptionScore(region.name, int(changed.sum()), int(changed.size), ratio, added,
-                       added >= threshold)
+                       selected)
 
 
 def detect_options(master: Image.Image, completed: Image.Image,

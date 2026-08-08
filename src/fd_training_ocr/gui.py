@@ -12,6 +12,7 @@ import tempfile
 from .config import load_config
 from .gui_controller import (EVENT_SELECTIONS, GuiPaths, accept_stage3_suggestion,
                              apply_event_selection, apply_gui_edit,
+                             apply_roster_linked_unit_edit,
                              automatic_export, build_processor, effective_event_selection,
                              export_record, load_gui_state, process_pdf, save_gui_state,
                              discover_pdfs, index_after_removal, structured_rows,
@@ -681,11 +682,21 @@ def main(argv=None) -> int:
             if field_name in EVENT_SELECTIONS:
                 return
             try:
-                apply_gui_edit(self.record, str(field_name), item.text())
+                canonical_name = None
+                if (str(field_name).endswith(".unit_id")
+                        and config.roster_path is not None):
+                    canonical_name = apply_roster_linked_unit_edit(
+                        self.record, str(field_name), item.text(),
+                        config.roster_path, Path.cwd())
+                else:
+                    apply_gui_edit(self.record, str(field_name), item.text())
                 automatic_export(self.record, args.export_dir)
                 self.persist_state()
-                self.raw.setPlainText(json.dumps(self.record, indent=2, ensure_ascii=False))
-                self.status.setText(f"Edited {field_name}; automatic export updated")
+                self.display_record(self.record)
+                suffix = (f"; roster set name to {canonical_name}"
+                          if canonical_name is not None else "")
+                self.status.setText(
+                    f"Edited {field_name}{suffix}; automatic export updated")
                 self.export_button.setEnabled(True)
             except (OSError, ValueError) as exc:
                 QtWidgets.QMessageBox.critical(self, "Unable to save correction", str(exc))

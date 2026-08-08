@@ -51,6 +51,13 @@ class CheckboxDetectionTests(unittest.TestCase):
         self.assertEqual(tp / (tp + fp), 1.0)
         self.assertEqual(tp / (tp + fn), 1.0)
 
+    def test_truck_requires_localized_new_ink_not_only_darkness(self) -> None:
+        master, _ = pages(set())
+        completed = master.point(lambda value: max(0, value - 20))
+        truck = next(score for score in detect_options(master, completed, definition())
+                     if score.name == "truck.brush54")
+        self.assertFalse(truck.selected)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -128,7 +128,12 @@ def processor_factory(*, work_dir: Path, master_path: Path, template_path: Path,
         event = {"total_hours_calculated": report.total_hours_calculated,
             "training_types": [x.removeprefix("training_type.") for x in selected if x.startswith("training_type.")],
             "facilities": [x.removeprefix("facility.") for x in selected if x.startswith("facility.")],
-            "trucks_used": apparatus, "second_pass_call_count": second_pass.call_count}
+            "trucks_used": apparatus, "second_pass_call_count": second_pass.call_count,
+            "option_scores": {score.name: {
+                "difference_ratio": round(score.difference_ratio, 5),
+                "added_ink_ratio": round(score.added_ink_ratio, 5),
+                "selected": score.selected,
+            } for score in option_scores}}
         return FormRecord(path.name, digest, 1, definition.form_type, definition.form_version,
             "review_required" if review_required else "succeeded", fields, event, tuple(attendees), tuple(warnings),
             {"status": "pending" if review_required else "not_required", "corrections_applied": False, "reviewed_at": None})

@@ -182,6 +182,38 @@ def apply_gui_edit(record: MutableMapping[str, Any], field_name: str, value: str
     review["reviewed_at"] = stamp
 
 
+def apply_roster_linked_unit_edit(record: MutableMapping[str, Any], field_name: str,
+                                  value: str, roster_path: Path,
+                                  repository_root: Path,
+                                  reviewed_at: str | None = None) -> str | None:
+    """Edit an attendee ID and fill its name from an exact unique roster match."""
+    match = re.fullmatch(r"attendee\.(\d+)\.unit_id", field_name)
+    if match is None:
+        raise ValueError(f"not an attendee unit ID field: {field_name}")
+    roster = load_roster(roster_path, repository_root)
+    stamp = reviewed_at or datetime.now(timezone.utc).isoformat()
+    apply_gui_edit(record, field_name, value, stamp)
+    member = roster.member_for_unit(value)
+    row = int(match.group(1))
+    canonical_name = member.name if member is not None else None
+    if canonical_name is not None:
+        name_field = f"attendee.{row:02d}.print_name"
+        apply_gui_edit(record, name_field, canonical_name, stamp)
+
+    attendees = []
+    for attendee in record.get("attendees", ()):
+        if isinstance(attendee, Mapping) and attendee.get("row") == row:
+            updated = dict(attendee)
+            updated["unit_id"] = value
+            if canonical_name is not None:
+                updated["print_name"] = canonical_name
+            attendees.append(updated)
+        else:
+            attendees.append(attendee)
+    record["attendees"] = attendees
+    return canonical_name
+
+
 def stage3_suggestion(record: Mapping[str, Any], field_name: str) -> Any:
     field = record.get("fields", {}).get(field_name)
     if (not isinstance(field, Mapping) or not field.get("second_pass_review_required")

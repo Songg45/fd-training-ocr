@@ -42,6 +42,9 @@ class TemplateTests(unittest.TestCase):
             prefix = f"attendee.{row:02d}"
             self.assertEqual(definition.region(prefix + ".unit_id").box[0], .165)
             self.assertEqual(definition.region(prefix + ".print_name").box[0], .282)
+        description = definition.region("description").box
+        self.assertLessEqual(description[1], .825)
+        self.assertGreaterEqual(description[3], .095)
 
 
 if __name__ == "__main__":
