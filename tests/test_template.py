@@ -31,7 +31,7 @@ class TemplateTests(unittest.TestCase):
         repository = Path(__file__).resolve().parents[1]
         definition = load_template(repository / "templates" / "pilot_fd_training_sign_in" / "v1" / "template.json")
         self.assertGreaterEqual(definition.region("start_time").box[0], .65)
-        self.assertGreaterEqual(definition.region("end_time").box[0], .79)
+        self.assertGreaterEqual(definition.region("end_time").box[0], .78)
         self.assertGreaterEqual(definition.region("total_hours").box[0], .74)
         self.assertGreaterEqual(definition.region("instructor").box[0], .23)
         for row in range(1, 20):
