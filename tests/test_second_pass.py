@@ -195,6 +195,22 @@ class SecondPassTests(unittest.TestCase):
         self.assertEqual(verified.resolutions["attendee.01.print_name"].resolved_value,
                          "Diane Starnes")
 
+    def test_two_exact_name_votes_and_unit_suffix_override_conflicting_stage3_id(self):
+        roster = Roster((RosterMember("Alex Myers", ("JR7454",), ()),
+                         RosterMember("Steve Crotts", ("7754",), ())))
+        first = (result("attendee.01.unit_id", "JK754", stage2="5B7454"),
+                 result("attendee.01.print_name", "MARTIN", stage2="Alex Myers"))
+        report = validate(first, roster=roster)
+        provider = MockRecognitionProvider(context_responses={"attendee.01": {
+            "unit_id": "7754", "print_name": "Alex Myers",
+            "handwriting_supports_candidate": True,
+            "alternatives": {"unit_id": [], "print_name": []}}})
+        verified = verify_second_pass(Image.new("L", (1000, 1000), 255), template(),
+                                      provider, first, report, roster)
+        self.assertEqual(verified.resolutions["attendee.01.unit_id"].resolved_value, "JR7454")
+        self.assertEqual(verified.resolutions["attendee.01.print_name"].resolved_value,
+                         "Alex Myers")
+
     def test_stage3_location_alias_resolves_and_description_leading_character_wins(self):
         first = (result("location", "lot", stage2="lot"),
                  result("description", "PPS $", stage2="PPS6"))
