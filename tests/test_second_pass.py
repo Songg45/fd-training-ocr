@@ -53,6 +53,35 @@ class ContextParserTests(unittest.TestCase):
 
 
 class SecondPassTests(unittest.TestCase):
+    def test_exact_unit_id_resolves_mismatched_name_from_roster_without_model_call(self):
+        roster = Roster((RosterMember("Nick Sledge", ("4354",), ("Nicholas Sledge",)),))
+        first = (result("attendee.01.unit_id", "4354"),
+                 result("attendee.01.print_name", "Nick Sludge"))
+        report = validate(first, roster=roster)
+        provider = MockRecognitionProvider()
+        verified = verify_second_pass(Image.new("L", (1000, 1000), 255), template(), provider,
+                                      first, report, roster)
+        self.assertEqual(verified.call_count, 0)
+        self.assertEqual(verified.resolutions["attendee.01.unit_id"].resolved_value, "4354")
+        name = verified.resolutions["attendee.01.print_name"]
+        self.assertEqual(name.resolved_value, "Nick Sledge")
+        self.assertIn("unit ID", name.resolution_reason)
+
+    def test_exact_roster_name_resolves_bad_id_when_member_has_one_id(self):
+        roster = Roster((RosterMember("Nick Sledge", ("4354",), ("Nicholas Sledge",)),))
+        first = (result("attendee.01.unit_id", "U354"),
+                 result("attendee.01.print_name", "Nicholas Sledge"))
+        report = validate(first, roster=roster)
+        provider = MockRecognitionProvider()
+        verified = verify_second_pass(Image.new("L", (1000, 1000), 255), template(), provider,
+                                      first, report, roster)
+        self.assertEqual(verified.call_count, 0)
+        unit = verified.resolutions["attendee.01.unit_id"]
+        self.assertEqual(unit.resolved_value, "4354")
+        self.assertEqual(verified.resolutions["attendee.01.print_name"].resolved_value,
+                         "Nick Sledge")
+        self.assertIn("name or alias", unit.resolution_reason)
+
     def test_only_disagreeing_generic_field_triggers_stage3(self):
         first = (result("date", "12/17/25", stage2="12/11/25"),
                  result("description", "Synthetic drill"))

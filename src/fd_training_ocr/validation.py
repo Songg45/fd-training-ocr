@@ -36,6 +36,19 @@ class Roster:
     def valid_unit(self, raw: str) -> bool:
         return any(raw.strip().casefold() == unit.casefold() for m in self.members for unit in m.unit_ids)
 
+    def member_for_name(self, raw: str | None) -> RosterMember | None:
+        if not raw or not raw.strip(): return None
+        hits = [member for member in self.members
+                if raw.strip().casefold() in
+                {value.casefold() for value in (member.name, *member.aliases)}]
+        return hits[0] if len(hits) == 1 else None
+
+    def member_for_unit(self, raw: str | None) -> RosterMember | None:
+        if not raw or not raw.strip(): return None
+        hits = [member for member in self.members
+                if raw.strip().casefold() in {unit.casefold() for unit in member.unit_ids}]
+        return hits[0] if len(hits) == 1 else None
+
     def suggest_name(self, raw: str, threshold: float = .72) -> tuple[str | None, bool, str | None]:
         scored = []
         for member in self.members:

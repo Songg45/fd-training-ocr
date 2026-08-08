@@ -230,6 +230,29 @@ def verify_second_pass(page: Image.Image, template: TemplateDefinition,
         unit_name, print_name = prefix + ".unit_id", prefix + ".print_name"
         if unit_name not in first or print_name not in first: continue
         unit_assessment, name_assessment = assessments.get(unit_name), assessments.get(print_name)
+        unit_member = roster.member_for_unit(unit_assessment.raw) if roster and unit_assessment else None
+        name_member = roster.member_for_name(name_assessment.raw) if roster and name_assessment else None
+        matched_member = None
+        matched_reason = None
+        if unit_member and (name_member is None or name_member == unit_member):
+            matched_member = unit_member
+            matched_reason = "exact unique roster unit ID resolved attendee pair"
+        elif name_member and unit_member is None and len(name_member.unit_ids) == 1:
+            matched_member = name_member
+            matched_reason = "exact unique roster name or alias resolved attendee pair"
+        if matched_member is not None:
+            unit1, unit2 = _stage_pair(first[unit_name]); name1, name2 = _stage_pair(first[print_name])
+            roster_unit = next((unit for unit in matched_member.unit_ids
+                                if unit_assessment and unit_assessment.raw
+                                and unit.casefold() == unit_assessment.raw.strip().casefold()),
+                               matched_member.unit_ids[0])
+            resolutions[unit_name] = FieldResolution(
+                unit_name, unit1, unit2, None, roster_unit, roster_unit,
+                matched_reason, False, ())
+            resolutions[print_name] = FieldResolution(
+                print_name, name1, name2, None, matched_member.name, matched_member.name,
+                matched_reason, False, ())
+            continue
         unit_candidate = _candidate_for(unit_name, unit_assessment, roster)
         name_candidate = _candidate_for(print_name, name_assessment, roster)
         trigger = any(_requires_stage3(name, first[name], assessments[name], validation.warnings)

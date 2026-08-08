@@ -108,13 +108,21 @@ def processor_factory(*, work_dir: Path, master_path: Path, template_path: Path,
         attendees = []
         for row in populated:
             prefix = f"attendee.{row:02d}"
-            attendees.append({"row": row, "unit_id": fields.get(prefix + ".unit_id", {}).get("normalized"), "print_name": fields.get(prefix + ".print_name", {}).get("normalized")})
+            unit_field = fields.get(prefix + ".unit_id", {})
+            name_field = fields.get(prefix + ".print_name", {})
+            attendees.append({"row": row,
+                "unit_id": unit_field.get("resolved_value") or unit_field.get("normalized"),
+                "print_name": name_field.get("resolved_value") or name_field.get("normalized")})
         warnings = list(report.warnings)
         if roster_warning: warnings.append(roster_warning)
         unresolved_second_pass = any(item.review_required for item in second_pass.resolutions.values())
         # A resolved Pass-2 field clears only that field's warnings. Global contradictions
         # remain review-required unless the complete time group validates deterministically.
-        unresolved_first_pass = any(a.review_required for a in report.fields)
+        unresolved_first_pass = any(
+            assessment.review_required and (
+                assessment.field_name not in second_pass.resolutions
+                or second_pass.resolutions[assessment.field_name].review_required)
+            for assessment in report.fields)
         unresolved_globals = bool(report.warnings)
         review_required = unresolved_first_pass or unresolved_second_pass or unresolved_globals or bool(roster_warning)
         event = {"total_hours_calculated": report.total_hours_calculated,

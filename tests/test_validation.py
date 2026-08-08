@@ -4,7 +4,8 @@ import tempfile
 import unittest
 
 from fd_training_ocr.recognition import RecognitionResult
-from fd_training_ocr.validation import RosterError, ValidationPolicy, load_roster, validate
+from fd_training_ocr.validation import (Roster, RosterError, RosterMember, ValidationPolicy,
+                                        load_roster, validate)
 
 
 def result(name, value, confidence=.99, alternatives=()):
@@ -12,6 +13,13 @@ def result(name, value, confidence=.99, alternatives=()):
 
 
 class RosterTests(unittest.TestCase):
+    def test_exact_member_lookup_links_name_alias_and_unit(self):
+        member = RosterMember("Nick Sledge", ("4354",), ("Nicholas Sledge",))
+        roster = Roster((member,))
+        self.assertEqual(roster.member_for_name("nicholas sledge"), member)
+        self.assertEqual(roster.member_for_unit("4354"), member)
+        self.assertIsNone(roster.member_for_unit("U354"))
+
     def test_external_roster_matches_alias_without_changing_raw(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "repo"; root.mkdir(); roster_path = Path(temp) / "roster.json"
