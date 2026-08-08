@@ -65,9 +65,13 @@ def processor_factory(*, work_dir: Path, master_path: Path, template_path: Path,
             crop_padding=recognition_crop_padding, max_attempts=recognition_max_attempts)
         apparatus_map = {"truck.engine54":"Engine 54", "truck.tanker54":"Tanker 54", "truck.engine254":"Engine 254", "truck.brush54":"Brush 54", "truck.tanker854":"Tanker 854"}
         apparatus = [apparatus_map[x] for x in selected if x in apparatus_map]
+        apparatus_warning = None
+        if len(apparatus) > 1:
+            apparatus_warning = "multiple apparatus marks require review"
+            apparatus = []
         first_report = validate(recognized, roster=roster, selected_apparatus=apparatus, policy=policy)
         second_pass = verify_second_pass(page, definition, stage3_provider or provider,
-                                         recognized, first_report, roster)
+                                         recognized, first_report, roster, policy)
         effective = tuple(replace(item, value=second_pass.resolutions[item.field_name].resolved_value,
                                   normalized_as_returned=second_pass.resolutions[item.field_name].resolved_value)
             if item.field_name in second_pass.resolutions and
@@ -115,6 +119,7 @@ def processor_factory(*, work_dir: Path, master_path: Path, template_path: Path,
                 "unit_id": unit_field.get("resolved_value") or unit_field.get("normalized"),
                 "print_name": name_field.get("resolved_value") or name_field.get("normalized")})
         warnings = list(report.warnings)
+        if apparatus_warning: warnings.append(apparatus_warning)
         if roster_warning: warnings.append(roster_warning)
         unresolved_second_pass = any(item.review_required for item in second_pass.resolutions.values())
         # A resolved Pass-2 field clears only that field's warnings. Global contradictions
@@ -125,7 +130,8 @@ def processor_factory(*, work_dir: Path, master_path: Path, template_path: Path,
                 or second_pass.resolutions[assessment.field_name].review_required)
             for assessment in report.fields)
         unresolved_globals = bool(report.warnings)
-        review_required = unresolved_first_pass or unresolved_second_pass or unresolved_globals or bool(roster_warning)
+        review_required = (unresolved_first_pass or unresolved_second_pass or unresolved_globals
+                           or bool(roster_warning) or bool(apparatus_warning))
         event = {"total_hours_calculated": report.total_hours_calculated,
             "training_types": [x.removeprefix("training_type.") for x in selected if x.startswith("training_type.")],
             "facilities": [x.removeprefix("facility.") for x in selected if x.startswith("facility.")],

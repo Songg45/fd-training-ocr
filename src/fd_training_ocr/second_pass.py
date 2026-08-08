@@ -10,11 +10,12 @@ from typing import Mapping, Sequence
 
 from PIL import Image
 
-from .normalization import normalize_date, normalize_hours, normalize_time
+from .normalization import (normalize_aliased_allowlisted, normalize_date, normalize_hours,
+                            normalize_time)
 from .recognition import (ContextVerificationRequest, ContextVerificationResult,
                           RecognitionError, RecognitionProvider, RecognitionResult)
 from .template import Region, TemplateDefinition
-from .validation import FieldAssessment, Roster, ValidationReport
+from .validation import FieldAssessment, Roster, ValidationPolicy, ValidationReport
 
 
 @dataclass(frozen=True)
@@ -160,6 +161,33 @@ def _strong_stage2_roster_pair(name: str | None, unit: str | None,
     return member
 
 
+def _partial_stage3_roster_pair(name: str | None, unit: str | None,
+                                roster: Roster | None):
+    """Match a name embedded in noisy text when a partial ID suffix corroborates it."""
+    if not roster or not name or not unit:
+        return None
+    observed_unit = re.sub(r"[^A-Za-z0-9]", "", unit).casefold()
+    if len(observed_unit) < 3:
+        return None
+    words = re.findall(r"[A-Za-z]+", name.casefold())
+    scored = []
+    for member in roster.members:
+        if len(member.unit_ids) != 1 or not member.unit_ids[0].casefold().endswith(observed_unit):
+            continue
+        best = 0.0
+        for candidate in (member.name, *member.aliases):
+            count = max(1, len(re.findall(r"[A-Za-z]+", candidate)))
+            for index in range(max(1, len(words) - count + 1)):
+                fragment = " ".join(words[index:index + count])
+                best = max(best, SequenceMatcher(None, fragment, candidate.casefold()).ratio())
+        if best >= .80:
+            scored.append((best, member))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    if not scored or (len(scored) > 1 and scored[0][0] - scored[1][0] < .08):
+        return None
+    return scored[0][1]
+
+
 def _stage_pair(result: RecognitionResult) -> tuple[str | None, str | None]:
     attempts = result.attempts
     return (attempts[0].get("value") if attempts else result.value,
@@ -204,6 +232,13 @@ def _resolve(field: str, first: str | None, independent: str | None,
             if normalize_date(combined).valid:
                 return FieldResolution(field, first, independent, second, candidate, combined,
                     "matching month/day readings combined with Stage 3 year", False, attempts)
+    if field == "description" and clean_independent and clean_second:
+        compact_independent = re.sub(r"[^A-Za-z0-9]", "", clean_independent).casefold()
+        compact_second = re.sub(r"[^A-Za-z0-9]", "", clean_second).casefold()
+        if (len(compact_independent) >= 4 and len(compact_second) == len(compact_independent) + 1
+                and compact_second.endswith(compact_independent)):
+            return FieldResolution(field, first, independent, second, candidate, clean_second,
+                "Stage 3 recovered one leading description character", False, attempts)
     return FieldResolution(field, first, independent, second, candidate, None, None, True, attempts)
 
 
@@ -222,7 +257,8 @@ def _requires_stage3(field: str, result: RecognitionResult, assessment: FieldAss
 
 def verify_second_pass(page: Image.Image, template: TemplateDefinition,
                        provider: RecognitionProvider, first_pass: Sequence[RecognitionResult],
-                       validation: ValidationReport, roster: Roster | None = None) -> SecondPassReport:
+                       validation: ValidationReport, roster: Roster | None = None,
+                       policy: ValidationPolicy = ValidationPolicy()) -> SecondPassReport:
     """Verify only questionable fields using contextual, signature-free crops."""
     first = {item.field_name: item for item in first_pass}
     assessments = {item.field_name: item for item in validation.fields}
@@ -370,6 +406,9 @@ def verify_second_pass(page: Image.Image, template: TemplateDefinition,
             if len(exact_member.unit_ids) == 1:
                 matched_member = exact_member
                 matched_reason = "exact roster name in an independent reading resolved attendee pair"
+        elif (partial_member := _partial_stage3_roster_pair(name_value, unit_value, roster)) is not None:
+            matched_member = partial_member
+            matched_reason = "Stage 3 name fragment and unit suffix agreed on unique roster member"
         elif roster and supports and unit_member is None and name_member is None:
             unit_suggestion, unit_ambiguous, _ = roster.suggest_unit(unit_value) if unit_value else (None, False, None)
             name_suggestion, name_ambiguous, _ = roster.suggest_name(name_value) if name_value else (None, False, None)
@@ -458,4 +497,11 @@ def verify_second_pass(page: Image.Image, template: TemplateDefinition,
         calls += len(attempt)
         value = result.values["value"] if result else None
         resolutions[name] = _resolve(name, stage1, stage2, value, None, attempt)
+        if name == "location" and value and resolutions[name].resolved_value is None:
+            location = normalize_aliased_allowlisted(
+                value, policy.locations, policy.location_aliases)
+            if location.valid:
+                resolutions[name] = FieldResolution(
+                    name, stage1, stage2, value, location.normalized, location.normalized,
+                    "valid Stage 3 location alias resolved to canonical location", False, attempt)
     return SecondPassReport(resolutions, calls)

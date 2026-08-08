@@ -7,7 +7,7 @@ from fd_training_ocr.recognition import (ContextVerificationRequest, MockRecogni
     RecognitionError, RecognitionResult, parse_context_response)
 from fd_training_ocr.second_pass import verify_second_pass
 from fd_training_ocr.template import Region, TemplateDefinition
-from fd_training_ocr.validation import Roster, RosterMember, validate
+from fd_training_ocr.validation import Roster, RosterMember, ValidationPolicy, validate
 
 
 def result(name, value, confidence=.99, alternatives=(), stage2=None):
@@ -21,6 +21,7 @@ def result(name, value, confidence=.99, alternatives=(), stage2=None):
 def template():
     regions = (
         Region("date", "text", (.10, .02, .20, .06), {}),
+        Region("location", "text", (.35, .02, .20, .06), {}),
         Region("start_time", "text", (.10, .10, .12, .08), {}),
         Region("end_time", "text", (.25, .10, .12, .08), {}),
         Region("total_hours", "text", (.40, .10, .10, .08), {}),
@@ -176,6 +177,40 @@ class SecondPassTests(unittest.TestCase):
         self.assertEqual(verified.resolutions["attendee.02.unit_id"].resolved_value, "4354")
         self.assertEqual(verified.resolutions["attendee.02.print_name"].resolved_value,
                          "Nick Sledge")
+
+    def test_noisy_stage3_name_and_partial_unit_suffix_resolve_roster_member(self):
+        roster = Roster((RosterMember("Diane Starnes", ("6854",), ()),
+                         RosterMember("Lee Trotter", ("8854",), ())))
+        first = (result("attendee.01.unit_id", "54-1C", stage2="$54|Ca"),
+                 result("attendee.01.print_name", "Theresa Brown, Diane Stark",
+                        stage2="Cathy Brown Diane Starr"))
+        report = validate(first, roster=roster)
+        provider = MockRecognitionProvider(context_responses={"attendee.01": {
+            "unit_id": "854", "print_name": 'Cathy Brown "Diane Starre"',
+            "handwriting_supports_candidate": True,
+            "alternatives": {"unit_id": [], "print_name": []}}})
+        verified = verify_second_pass(Image.new("L", (1000, 1000), 255), template(),
+                                      provider, first, report, roster)
+        self.assertEqual(verified.resolutions["attendee.01.unit_id"].resolved_value, "6854")
+        self.assertEqual(verified.resolutions["attendee.01.print_name"].resolved_value,
+                         "Diane Starnes")
+
+    def test_stage3_location_alias_resolves_and_description_leading_character_wins(self):
+        first = (result("location", "lot", stage2="lot"),
+                 result("description", "PPS $", stage2="PPS6"))
+        report = validate(first, policy=ValidationPolicy(
+            locations=("District", "Pilot FD"),
+            location_aliases=(("Pilot", "Pilot FD"),)))
+        provider = MockRecognitionProvider(context_responses={
+            "location": {"value": "Pilot", "alternatives": {"value": []}},
+            "description": {"value": "OPPS 6", "alternatives": {"value": []}},
+        })
+        policy = ValidationPolicy(locations=("District", "Pilot FD"),
+                                  location_aliases=(("Pilot", "Pilot FD"),))
+        verified = verify_second_pass(Image.new("L", (1000, 1000), 255), template(),
+                                      provider, first, report, policy=policy)
+        self.assertEqual(verified.resolutions["location"].resolved_value, "Pilot FD")
+        self.assertEqual(verified.resolutions["description"].resolved_value, "OPPS 6")
 
     def test_two_fuzzy_instructor_readings_resolve_same_unique_roster_member(self):
         roster = Roster((RosterMember("Samantha Gibson", ("7254",), ()),
