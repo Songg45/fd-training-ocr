@@ -42,8 +42,10 @@ class ConfigTests(unittest.TestCase):
                 'location_aliases={PFD="Pilot Fire Department", "Pilot FD"="Pilot Fire Department"}\n',
                 encoding="utf-8")
             config = load_config(path)
-        self.assertEqual(dict(config.location_aliases),
-                         {"PFD":"Pilot Fire Department", "Pilot FD":"Pilot Fire Department"})
+        self.assertEqual(dict(config.location_aliases)["PFD"], "Pilot FD")
+        self.assertEqual(dict(config.location_aliases)["Pilot Fire Department"], "Pilot FD")
+        self.assertIn("Pilot FD", config.valid_locations)
+        self.assertNotIn("Pilot Fire Department", config.valid_locations)
 
     def test_rejects_unknown_keys(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

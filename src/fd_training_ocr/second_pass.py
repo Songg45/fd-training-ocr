@@ -281,6 +281,7 @@ def verify_second_pass(page: Image.Image, template: TemplateDefinition,
         unit_name, print_name = prefix + ".unit_id", prefix + ".print_name"
         if unit_name not in first or print_name not in first: continue
         unit_assessment, name_assessment = assessments.get(unit_name), assessments.get(print_name)
+        unit1, unit2 = _stage_pair(first[unit_name]); name1, name2 = _stage_pair(first[print_name])
         unit_member = roster.member_for_unit(unit_assessment.raw) if roster and unit_assessment else None
         name_member = roster.member_for_name(name_assessment.raw) if roster and name_assessment else None
         matched_member = None
@@ -292,7 +293,6 @@ def verify_second_pass(page: Image.Image, template: TemplateDefinition,
             matched_member = name_member
             matched_reason = "exact unique roster name or alias resolved attendee pair"
         if matched_member is not None:
-            unit1, unit2 = _stage_pair(first[unit_name]); name1, name2 = _stage_pair(first[print_name])
             roster_unit = next((unit for unit in matched_member.unit_ids
                                 if unit_assessment and unit_assessment.raw
                                 and unit.casefold() == unit_assessment.raw.strip().casefold()),
@@ -321,7 +321,6 @@ def verify_second_pass(page: Image.Image, template: TemplateDefinition,
         calls += len(attempt)
         supports = bool(result and result.handwriting_supports_candidate)
         values = result.values if result else {"unit_id": None, "print_name": None}
-        unit1, unit2 = _stage_pair(first[unit_name]); name1, name2 = _stage_pair(first[print_name])
         resolutions[unit_name] = _resolve(unit_name, unit1, unit2, values["unit_id"],
                                           unit_candidate, attempt, supports=supports)
         resolutions[print_name] = _resolve(print_name, name1, name2, values["print_name"],
@@ -334,6 +333,8 @@ def verify_second_pass(page: Image.Image, template: TemplateDefinition,
         name_value = resolutions[print_name].resolved_value or values["print_name"]
         unit_member = roster.member_for_unit(unit_value) if roster and unit_value else None
         name_member = roster.member_for_name(name_value) if roster and name_value else None
+        exact_name_members = ({member for value in (name1, name2, name_value)
+                               if roster and (member := roster.member_for_name(value)) is not None})
         matched_member = None
         matched_reason = None
         if unit_member and (name_member is None or name_member == unit_member):
@@ -342,16 +343,37 @@ def verify_second_pass(page: Image.Image, template: TemplateDefinition,
         elif name_member and unit_member is None and len(name_member.unit_ids) == 1:
             matched_member = name_member
             matched_reason = "exact Stage 3 roster name or alias resolved attendee pair"
-        elif (roster and supports and unit_member is None and name_member is None
-              and name_assessment.raw and name_value):
-            first_suggestion, first_ambiguous, _ = roster.suggest_name(name_assessment.raw)
-            stage3_suggestion, stage3_ambiguous, _ = roster.suggest_name(name_value)
-            if (first_suggestion and first_suggestion == stage3_suggestion
-                    and not first_ambiguous and not stage3_ambiguous):
-                fuzzy_member = roster.member_for_name(first_suggestion)
+        elif unit_member is None and len(exact_name_members) == 1:
+            exact_member = next(iter(exact_name_members))
+            if len(exact_member.unit_ids) == 1:
+                matched_member = exact_member
+                matched_reason = "exact roster name in an independent reading resolved attendee pair"
+        elif roster and supports and unit_member is None and name_member is None:
+            unit_suggestion, unit_ambiguous, _ = roster.suggest_unit(unit_value) if unit_value else (None, False, None)
+            name_suggestion, name_ambiguous, _ = roster.suggest_name(name_value) if name_value else (None, False, None)
+            unit_suggestion_member = roster.member_for_unit(unit_suggestion)
+            name_suggestion_member = roster.member_for_name(name_suggestion)
+            if (unit_suggestion_member is not None
+                    and unit_suggestion_member == name_suggestion_member
+                    and not unit_ambiguous and not name_ambiguous):
+                matched_member = unit_suggestion_member
+                matched_reason = "Stage 3 fuzzy unit and name agreed on unique roster member"
+        if (matched_member is None and roster and supports and unit_member is None
+                and name_member is None):
+            suggestions = []
+            for reading in (name1, name2, name_value):
+                if not reading:
+                    continue
+                suggestion, ambiguous, _ = roster.suggest_name(reading)
+                if suggestion and not ambiguous:
+                    suggestions.append(suggestion)
+            winners = {suggestion for suggestion in suggestions
+                       if suggestions.count(suggestion) >= 2}
+            if len(winners) == 1:
+                fuzzy_member = roster.member_for_name(next(iter(winners)))
                 if fuzzy_member is not None and len(fuzzy_member.unit_ids) == 1:
                     matched_member = fuzzy_member
-                    matched_reason = "independent fuzzy name readings resolved unique roster member"
+                    matched_reason = "two independent fuzzy name readings resolved unique roster member"
         if matched_member is not None:
             roster_unit = next((unit for unit in matched_member.unit_ids
                                 if unit_value and unit.casefold() == unit_value.strip().casefold()),

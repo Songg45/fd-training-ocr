@@ -21,11 +21,15 @@ class AppConfig:
     ollama_timeout_seconds: float = 90.0
     roster_path: Path | None = None
     valid_apparatus: tuple[str, ...] = ("Engine 54", "Tanker 54", "Brush 54", "Engine 254", "Tanker 854", "Brush 254")
-    valid_locations: tuple[str, ...] = ("District", "Pilot Fire Department")
+    valid_locations: tuple[str, ...] = ("District", "Pilot FD")
     location_aliases: tuple[tuple[str, str], ...] = (
-        ("PFD", "Pilot Fire Department"),
-        ("Pilot FD", "Pilot Fire Department"),
-        ("Pilot Fire Department", "Pilot Fire Department"),
+        ("PFD", "Pilot FD"),
+        ("Pilot", "Pilot FD"),
+        ("Pilot Fire", "Pilot FD"),
+        ("Pilot Fire Dep", "Pilot FD"),
+        ("Pilot Fire Dept", "Pilot FD"),
+        ("Pilot Fire Department", "Pilot FD"),
+        ("Pilot FD", "Pilot FD"),
     )
     recognition_crop_padding_pixels: int = 12
     recognition_max_attempts: int = 3
@@ -71,7 +75,23 @@ def _build_config(values: Mapping[str, Any]) -> AppConfig:
         raise ValueError("app.roster_path must be an absolute path")
     apparatus = values.get("valid_apparatus", list(AppConfig.valid_apparatus))
     locations = values.get("valid_locations", list(AppConfig.valid_locations))
-    location_aliases = values.get("location_aliases", dict(AppConfig.location_aliases))
+    pilot_spellings = {"pilot", "pilot fire", "pilot fire dep", "pilot fire dept",
+                       "pilot fire department", "pfd", "pilot fd"}
+    locations = ["Pilot FD" if item.strip().casefold() in pilot_spellings else item
+                 for item in locations] if isinstance(locations, list) else locations
+    if isinstance(locations, list):
+        locations = list(dict.fromkeys(locations))
+    location_aliases = dict(AppConfig.location_aliases)
+    configured_location_aliases = values.get("location_aliases", {})
+    if isinstance(configured_location_aliases, dict):
+        location_aliases.update(configured_location_aliases)
+    else:
+        location_aliases = configured_location_aliases
+    if isinstance(location_aliases, dict):
+        location_aliases = {
+            alias: ("Pilot FD" if target.strip().casefold() in pilot_spellings else target)
+            for alias, target in location_aliases.items()
+        }
     if not isinstance(apparatus, list) or not apparatus or not all(isinstance(x, str) and x.strip() for x in apparatus):
         raise ValueError("app.valid_apparatus must be a nonempty array of strings")
     if not isinstance(locations, list) or not locations or not all(isinstance(x, str) and x.strip() for x in locations):

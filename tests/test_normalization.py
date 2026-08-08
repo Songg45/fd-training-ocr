@@ -20,9 +20,12 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual(normalize_allowlisted("district", ("District",)).normalized, "District")
 
     def test_location_aliases_normalize_to_canonical_value(self):
-        aliases = {"PFD":"Pilot Fire Department", "Pilot FD":"Pilot Fire Department"}
-        for raw in ("PFD", "pfd", "Pilot FD", "Pilot Fire Department"):
+        aliases = {value:"Pilot FD" for value in
+                   ("PFD", "Pilot", "Pilot Fire", "Pilot Fire Dep", "Pilot Fire Dept",
+                    "Pilot Fire Department", "Pilot FD")}
+        for raw in ("PFD", "pfd", "Pilot", "Pilot Fire", "Pilot Fire Dep",
+                    "Pilot Fire Dept", "Pilot Fire Department", "Pilot FD"):
             value = normalize_aliased_allowlisted(
-                raw, ("District", "Pilot Fire Department"), aliases)
+                raw, ("District", "Pilot FD"), aliases)
             self.assertTrue(value.valid)
-            self.assertEqual(value.normalized, "Pilot Fire Department")
+            self.assertEqual(value.normalized, "Pilot FD")

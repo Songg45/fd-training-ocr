@@ -115,6 +115,37 @@ class SecondPassTests(unittest.TestCase):
         self.assertEqual(name.resolved_value, "Samantha Gibson")
         self.assertIn("fuzzy name readings", name.resolution_reason)
 
+    def test_exact_stage2_name_resolves_attendee_pair(self):
+        roster = Roster((RosterMember("Brandon Hedrick", ("3454",), ()),))
+        first = (result("attendee.01.unit_id", "1715", stage2="4"),
+                 result("attendee.01.print_name", "Dianen Hall", stage2="Brandon Hedrick"))
+        report = validate(first, roster=roster)
+        provider = MockRecognitionProvider(context_responses={"attendee.01": {
+            "unit_id": "JP8354", "print_name": "Branden Hedrick",
+            "handwriting_supports_candidate": True,
+            "alternatives": {"unit_id": [], "print_name": []}}})
+        verified = verify_second_pass(Image.new("L", (1000, 1000), 255), template(),
+                                      provider, first, report, roster)
+        self.assertEqual(verified.resolutions["attendee.01.unit_id"].resolved_value, "3454")
+        self.assertEqual(verified.resolutions["attendee.01.print_name"].resolved_value,
+                         "Brandon Hedrick")
+
+    def test_stage2_and_stage3_fuzzy_names_resolve_attendee_pair(self):
+        roster = Roster((RosterMember("Nick Sledge", ("4354",), ()),
+                         RosterMember("Brandon Hedrick", ("3454",), ())))
+        first = (result("attendee.01.unit_id", "477", stage2="4259"),
+                 result("attendee.01.print_name", "IVAN IVOSY", stage2="Nich Thely"))
+        report = validate(first, roster=roster)
+        provider = MockRecognitionProvider(context_responses={"attendee.01": {
+            "unit_id": "4359", "print_name": "Nich Sledy",
+            "handwriting_supports_candidate": True,
+            "alternatives": {"unit_id": [], "print_name": []}}})
+        verified = verify_second_pass(Image.new("L", (1000, 1000), 255), template(),
+                                      provider, first, report, roster)
+        self.assertEqual(verified.resolutions["attendee.01.unit_id"].resolved_value, "4354")
+        self.assertEqual(verified.resolutions["attendee.01.print_name"].resolved_value,
+                         "Nick Sledge")
+
     def test_two_fuzzy_instructor_readings_resolve_same_unique_roster_member(self):
         roster = Roster((RosterMember("Samantha Gibson", ("7254",), ()),
                          RosterMember("Samuel Gibson", ("7354",), ())))
