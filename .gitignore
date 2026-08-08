@@ -18,6 +18,8 @@ tmp/
 .env.*
 !.env.example
 config.local.toml
+# Deployment roster is external (recommended: C:\Temp\fd-training-ocr-roster.json).
+*roster*.json
 
 # Python tooling
 __pycache__/

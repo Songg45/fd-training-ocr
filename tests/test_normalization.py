@@ -1,6 +1,18 @@
 import unittest
 
+from fd_training_ocr.normalization import normalize_allowlisted, normalize_date, normalize_hours, normalize_time
 
-@unittest.skip("Normalization begins at Checkpoint 6")
+
 class NormalizationTests(unittest.TestCase):
-    pass
+    def test_preserves_written_date_and_normalizes(self):
+        value = normalize_date("12/17/25")
+        self.assertEqual((value.raw, value.normalized, value.valid), ("12/17/25", "2025-12-17", True))
+
+    def test_invalid_date_is_not_rewritten(self):
+        value = normalize_date("LZ//WOES")
+        self.assertEqual(value.raw, "LZ//WOES"); self.assertIsNone(value.normalized); self.assertFalse(value.valid)
+
+    def test_time_hours_and_allowlist(self):
+        self.assertEqual(normalize_time("4:00 PM").normalized, "16:00")
+        self.assertEqual(normalize_hours("2.0").normalized, "2")
+        self.assertEqual(normalize_allowlisted("district", ("District",)).normalized, "District")

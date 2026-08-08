@@ -1,1 +1,66 @@
-"""Field normalization boundary (future checkpoint)."""
+"""Conservative field normalization which always preserves written OCR text."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+import re
+from typing import Callable
+
+
+@dataclass(frozen=True)
+class NormalizedValue:
+    raw: str | None
+    normalized: str | None
+    valid: bool
+    reason: str | None = None
+
+
+def _empty(raw: str | None) -> NormalizedValue | None:
+    if raw is None or not raw.strip():
+        return NormalizedValue(raw, None, False, "value is blank")
+    return None
+
+
+def normalize_date(raw: str | None) -> NormalizedValue:
+    if result := _empty(raw): return result
+    text = raw.strip()
+    for fmt in ("%m/%d/%Y", "%m/%d/%y", "%m-%d-%Y", "%Y-%m-%d"):
+        try:
+            return NormalizedValue(raw, datetime.strptime(text, fmt).date().isoformat(), True)
+        except ValueError:
+            pass
+    return NormalizedValue(raw, None, False, "unrecognized or invalid date")
+
+
+def normalize_time(raw: str | None) -> NormalizedValue:
+    if result := _empty(raw): return result
+    text = re.sub(r"\s+", "", raw).upper().replace(".", "")
+    for fmt in ("%H:%M", "%H%M", "%I:%M%p", "%I%p"):
+        try:
+            return NormalizedValue(raw, datetime.strptime(text, fmt).strftime("%H:%M"), True)
+        except ValueError:
+            pass
+    return NormalizedValue(raw, None, False, "unrecognized or invalid time")
+
+
+def normalize_hours(raw: str | None) -> NormalizedValue:
+    if result := _empty(raw): return result
+    try:
+        value = float(raw.strip())
+    except ValueError:
+        return NormalizedValue(raw, None, False, "hours is not numeric")
+    if value < 0 or value > 24:
+        return NormalizedValue(raw, None, False, "hours is outside 0-24")
+    return NormalizedValue(raw, f"{value:g}", True)
+
+
+def normalize_allowlisted(raw: str | None, allowed: tuple[str, ...]) -> NormalizedValue:
+    if result := _empty(raw): return result
+    matches = {item.casefold(): item for item in allowed}
+    normalized = matches.get(raw.strip().casefold())
+    return (NormalizedValue(raw, normalized, True) if normalized is not None else
+            NormalizedValue(raw, raw.strip(), False, "value is not in configured allowlist"))
+
+
+Normalizer = Callable[[str | None], NormalizedValue]

@@ -4,9 +4,8 @@ A local-first pipeline for extracting auditable, structured data from standardiz
 
 ## Current status
 
-Checkpoint 5 adds provider-neutral, crop-level handwriting recognition, a deterministic
-offline mock, and an optional local Ollama vision provider. It does **not** normalize,
-validate, export, or send data to hosted services.
+Checkpoint 6 adds conservative normalization, deterministic validation, external roster
+matching, and local review artifacts. It does **not** implement production export or batch operation.
 
 ## Requirements
 
@@ -34,9 +33,23 @@ offline = true
 ollama_endpoint = "http://127.0.0.1:11434"
 ollama_model = "qwen2.5vl:7b"
 ollama_timeout_seconds = 90
+roster_path = "C:\\Temp\\fd-training-ocr-roster.json"
+valid_apparatus = ["Engine 54", "Tanker 54", "Brush 54", "Engine 254", "Tanker 854", "Brush 254"]
+valid_locations = ["District"]
 ```
 
 Pass a file with `--config config.local.toml`. Local configuration, PDFs, outputs, logs, databases, crops, and signatures are ignored by Git.
+
+The optional roster must use an absolute path outside this Git repository. Its schema is
+`{"schema_version":1,"members":[{"name":"...","unit_ids":["..."],"aliases":["..."]}]}`.
+Use `C:\Temp\fd-training-ocr-roster.json` for deployment. The loader rejects repository-local,
+missing, unreadable, malformed, or unexpected roster content. Never commit roster data.
+
+Validation preserves every written value and records normalized proposals separately. A
+field requires review when syntax/allowlists/roster checks fail, confidence is below its
+field threshold, alternatives exist, or cross-field checks conflict. Model confidence is
+never sufficient to bypass these checks. Review artifacts are local and ignored; the HTML
+shows only non-signature crops and downloads corrections as a separate timestamped record.
 
 ## CLI shell
 

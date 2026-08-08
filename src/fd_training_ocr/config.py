@@ -18,17 +18,22 @@ class AppConfig:
     ollama_endpoint: str = "http://127.0.0.1:11434"
     ollama_model: str = "qwen2.5vl:7b"
     ollama_timeout_seconds: float = 90.0
+    roster_path: Path | None = None
+    valid_apparatus: tuple[str, ...] = ("Engine 54", "Tanker 54", "Brush 54", "Engine 254", "Tanker 854", "Brush 254")
+    valid_locations: tuple[str, ...] = ("District",)
 
     def as_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data["output_dir"] = str(self.output_dir)
         data["template_dir"] = str(self.template_dir)
+        data["roster_path"] = str(self.roster_path) if self.roster_path else None
         return data
 
 
 def _build_config(values: Mapping[str, Any]) -> AppConfig:
     allowed = {"output_dir", "template_dir", "log_level", "offline",
-               "ollama_endpoint", "ollama_model", "ollama_timeout_seconds"}
+               "ollama_endpoint", "ollama_model", "ollama_timeout_seconds", "roster_path",
+               "valid_apparatus", "valid_locations"}
     unknown = set(values) - allowed
     if unknown:
         raise ValueError(f"Unknown app configuration key(s): {', '.join(sorted(unknown))}")
@@ -49,6 +54,15 @@ def _build_config(values: Mapping[str, Any]) -> AppConfig:
         raise ValueError("app.ollama_model must be a non-empty string")
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
         raise ValueError("app.ollama_timeout_seconds must be positive")
+    roster_path = values.get("roster_path")
+    if roster_path is not None and (not isinstance(roster_path, str) or not Path(roster_path).is_absolute()):
+        raise ValueError("app.roster_path must be an absolute path")
+    apparatus = values.get("valid_apparatus", list(AppConfig.valid_apparatus))
+    locations = values.get("valid_locations", list(AppConfig.valid_locations))
+    if not isinstance(apparatus, list) or not apparatus or not all(isinstance(x, str) and x.strip() for x in apparatus):
+        raise ValueError("app.valid_apparatus must be a nonempty array of strings")
+    if not isinstance(locations, list) or not locations or not all(isinstance(x, str) and x.strip() for x in locations):
+        raise ValueError("app.valid_locations must be a nonempty array of strings")
 
     return AppConfig(
         output_dir=Path(values.get("output_dir", "output")),
@@ -58,6 +72,9 @@ def _build_config(values: Mapping[str, Any]) -> AppConfig:
         ollama_endpoint=endpoint,
         ollama_model=model,
         ollama_timeout_seconds=float(timeout),
+        roster_path=Path(roster_path) if roster_path else None,
+        valid_apparatus=tuple(apparatus),
+        valid_locations=tuple(locations),
     )
 
 
