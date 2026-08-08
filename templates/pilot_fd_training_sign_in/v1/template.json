@@ -24,7 +24,7 @@
   },
   "regions": [
     {"name": "date", "kind": "text", "box": [0.185, 0.153, 0.170, 0.030]},
-    {"name": "start_time", "kind": "text", "box": [0.650, 0.153, 0.100, 0.030]},
+    {"name": "start_time", "kind": "text", "box": [0.635, 0.153, 0.115, 0.030]},
     {"name": "end_time", "kind": "text", "box": [0.785, 0.153, 0.132, 0.030]},
     {"name": "location", "kind": "text", "box": [0.216, 0.180, 0.225, 0.029]},
     {"name": "total_hours", "kind": "text", "box": [0.747, 0.180, 0.065, 0.029]},

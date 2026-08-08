@@ -30,7 +30,11 @@ class TemplateTests(unittest.TestCase):
     def test_v1_writable_regions_exclude_known_printed_label_columns(self) -> None:
         repository = Path(__file__).resolve().parents[1]
         definition = load_template(repository / "templates" / "pilot_fd_training_sign_in" / "v1" / "template.json")
-        self.assertGreaterEqual(definition.region("start_time").box[0], .65)
+        start = definition.region("start_time").box
+        end = definition.region("end_time").box
+        self.assertEqual(start, (.635, .153, .115, .03))
+        self.assertLessEqual(start[0] + start[2], .75)  # stops before printed "To"
+        self.assertEqual(end, (.785, .153, .132, .03))
         self.assertGreaterEqual(definition.region("end_time").box[0], .78)
         self.assertGreaterEqual(definition.region("total_hours").box[0], .74)
         self.assertGreaterEqual(definition.region("instructor").box[0], .23)
