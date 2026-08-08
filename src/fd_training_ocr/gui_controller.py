@@ -63,6 +63,12 @@ def index_after_removal(removed_index: int, remaining_count: int) -> int:
     return min(removed_index, remaining_count - 1)
 
 
+def unprocessed_sources(sources: list[Path] | tuple[Path, ...],
+                        records: Mapping[Path, Any]) -> tuple[Path, ...]:
+    """Return queued PDFs that do not yet have a completed in-memory result."""
+    return tuple(source for source in sources if source not in records)
+
+
 def display_value(field: Mapping[str, Any]) -> Any:
     for key in ("reviewed_value", "resolved_value", "normalized", "raw"):
         if field.get(key) is not None:

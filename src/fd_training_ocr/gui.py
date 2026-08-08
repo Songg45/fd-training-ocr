@@ -12,7 +12,8 @@ import tempfile
 from .config import load_config
 from .gui_controller import (FACILITY_LABELS, GuiPaths, apply_facilities_edit, apply_gui_edit,
                              build_processor, effective_facilities, export_record, process_pdf,
-                             discover_pdfs, index_after_removal, structured_rows, validate_pdfs)
+                             discover_pdfs, index_after_removal, structured_rows,
+                             unprocessed_sources, validate_pdfs)
 from .pdf_render import render_pdf
 
 
@@ -71,10 +72,17 @@ def main(argv=None) -> int:
             self.source = None
             self.record = None
             self.records = {}
+            self.failures = {}
             self.preview_paths = {}
             self.preview_temp = tempfile.TemporaryDirectory(prefix="fd-training-ocr-gui-")
             self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="fd-ocr")
             self.future: Future | None = None
+            self.processing_source = None
+            self.batch_queue = []
+            self.batch_total = 0
+            self.batch_completed = 0
+            self.batch_failures = 0
+            self.stop_requested = False
             self.busy = False
             self.poll_timer = QtCore.QTimer(self)
             self.poll_timer.setInterval(100)
@@ -91,15 +99,19 @@ def main(argv=None) -> int:
             self.next_button = QtWidgets.QPushButton("Next")
             self.page_label = QtWidgets.QLabel("0 of 0")
             self.process_button = QtWidgets.QPushButton("Process")
+            self.process_all_button = QtWidgets.QPushButton("Process All")
+            self.stop_button = QtWidgets.QPushButton("Stop After Current")
             self.export_button = QtWidgets.QPushButton("Export Results")
             self.remove_button.setEnabled(False)
             self.previous_button.setEnabled(False); self.next_button.setEnabled(False)
-            self.process_button.setEnabled(False); self.export_button.setEnabled(False)
+            self.process_button.setEnabled(False); self.process_all_button.setEnabled(False)
+            self.stop_button.setEnabled(False); self.export_button.setEnabled(False)
             self.progress = QtWidgets.QProgressBar(); self.progress.setRange(0, 1); self.progress.setValue(0)
             self.status = QtWidgets.QLabel("Load a PDF to begin")
             for widget in (self.load_button, self.folder_button, self.remove_button,
                            self.previous_button, self.page_label,
-                           self.next_button, self.process_button, self.export_button,
+                           self.next_button, self.process_button, self.process_all_button,
+                           self.stop_button, self.export_button,
                            self.progress, self.status): controls.addWidget(widget)
             self.warning = QtWidgets.QLabel("")
             self.warning.setStyleSheet("background:#8b1e1e;color:white;font-weight:bold;padding:8px;")
@@ -123,6 +135,8 @@ def main(argv=None) -> int:
             self.previous_button.clicked.connect(lambda: self.navigate(-1))
             self.next_button.clicked.connect(lambda: self.navigate(1))
             self.process_button.clicked.connect(self.process)
+            self.process_all_button.clicked.connect(self.process_all)
+            self.stop_button.clicked.connect(self.request_stop)
             self.export_button.clicked.connect(self.export)
 
         def load_pdfs(self):
@@ -186,6 +200,7 @@ def main(argv=None) -> int:
                 return
             source = self.sources.pop(self.current_index)
             self.records.pop(source, None)
+            self.failures.pop(source, None)
             self.preview_paths.pop(source, None)
             self.current_index = index_after_removal(self.current_index, len(self.sources))
             if self.current_index >= 0:
@@ -212,8 +227,15 @@ def main(argv=None) -> int:
             self.preview.show_image(image_path)
             self.record = self.records.get(self.source)
             if self.record is None:
-                self.raw.clear(); self.table.setRowCount(0); self.warning.hide()
-                self.status.setText(self.source.name)
+                self.raw.clear(); self.table.setRowCount(0)
+                failure = self.failures.get(self.source)
+                if failure:
+                    self.warning.setText(f"PROCESSING FAILED — {failure}")
+                    self.warning.show()
+                    self.status.setText("Processing failed — retry with Process or Process All")
+                else:
+                    self.warning.hide()
+                    self.status.setText(self.source.name)
             else:
                 self.display_record(self.record)
             self.update_navigation()
@@ -227,14 +249,60 @@ def main(argv=None) -> int:
             self.next_button.setEnabled(not self.busy and 0 <= self.current_index < count - 1)
             self.remove_button.setEnabled(not self.busy and self.source is not None)
             self.process_button.setEnabled(not self.busy and self.source is not None)
+            self.process_all_button.setEnabled(
+                not self.busy and bool(unprocessed_sources(self.sources, self.records)))
+            self.stop_button.setEnabled(
+                self.busy and self.batch_total > 0 and not self.stop_requested)
             self.export_button.setEnabled(not self.busy and self.record is not None)
 
         def process(self):
             self.set_busy(True); self.status.setText("Processing locally: Stages 1–2 Qwen2.5-VL, Stage 3 Qwen3-VL…")
             source = self.source
+            if source is None:
+                return
+            self.batch_queue = []
+            self.batch_total = 0
+            self.stop_requested = False
+            self.progress.setRange(0, 0)
+            self.processing_source = source
             self.future = self.executor.submit(
                 lambda: process_pdf(source, build_processor(config, paths)))
             self.poll_timer.start()
+
+        def process_all(self):
+            pending = list(unprocessed_sources(self.sources, self.records))
+            if not pending:
+                self.status.setText("All queued PDFs are already processed")
+                return
+            self.batch_queue = pending
+            self.batch_total = len(pending)
+            self.batch_completed = 0
+            self.batch_failures = 0
+            self.stop_requested = False
+            self.set_busy(True)
+            self.progress.setRange(0, self.batch_total)
+            self.progress.setValue(0)
+            self.process_next_batch_item()
+
+        def process_next_batch_item(self):
+            if self.stop_requested or not self.batch_queue:
+                self.finish_batch(stopped=self.stop_requested)
+                return
+            source = self.batch_queue.pop(0)
+            self.current_index = self.sources.index(source)
+            self.show_current()
+            self.processing_source = source
+            self.status.setText(
+                f"Processing {self.batch_completed + 1} of {self.batch_total}: {source.name}")
+            self.future = self.executor.submit(
+                lambda: process_pdf(source, build_processor(config, paths)))
+            self.poll_timer.start()
+
+        def request_stop(self):
+            if self.busy and self.batch_total:
+                self.stop_requested = True
+                self.stop_button.setEnabled(False)
+                self.status.setText("Stop requested — finishing the current PDF")
 
         @QtCore.Slot()
         def poll_result(self):
@@ -243,23 +311,31 @@ def main(argv=None) -> int:
             self.poll_timer.stop()
             future, self.future = self.future, None
             try:
-                self.finished(future.result())
+                self.finished(self.processing_source, future.result())
             except Exception as exc:
-                self.failed(f"{type(exc).__name__}: {exc}")
+                self.failed(self.processing_source, f"{type(exc).__name__}: {exc}")
 
         def set_busy(self, busy):
             self.busy = busy
             self.load_button.setEnabled(not busy)
             self.folder_button.setEnabled(not busy)
-            self.progress.setRange(0, 0 if busy else 1)
-            if not busy: self.progress.setValue(1)
+            if not busy and not self.batch_total:
+                self.progress.setRange(0, 1)
+                self.progress.setValue(1)
             self.update_navigation()
 
-        def finished(self, record):
-            self.records[self.source] = record
+        def finished(self, source, record):
+            self.records[source] = record
+            self.failures.pop(source, None)
             self.record = record
             self.display_record(record)
-            self.set_busy(False)
+            if self.batch_total:
+                self.batch_completed += 1
+                self.progress.setValue(self.batch_completed)
+                self.process_next_batch_item()
+            else:
+                self.processing_source = None
+                self.set_busy(False)
 
         def display_record(self, record):
             self.raw.setPlainText(json.dumps(record, indent=2, ensure_ascii=False))
@@ -278,7 +354,6 @@ def main(argv=None) -> int:
             needs_review = record.get("status") == "review_required"
             self.warning.setText("REVIEW REQUIRED — " + ("; ".join(record.get("warnings", ())) or "one or more fields require review"))
             self.warning.setVisible(needs_review); self.status.setText("Complete — review required" if needs_review else "Complete")
-            self.set_busy(False)
 
         def result_edited(self, item):
             if self.record is None or item.column() != 1:
@@ -323,10 +398,33 @@ def main(argv=None) -> int:
             self.status.setText("Edited Facilities; machine result preserved")
             self.export_button.setEnabled(True)
 
-        @QtCore.Slot(str)
-        def failed(self, message):
-            self.set_busy(False); self.status.setText("Processing failed")
-            QtWidgets.QMessageBox.critical(self, "OCR failed", message)
+        def failed(self, source, message):
+            self.failures[source] = message
+            if self.batch_total:
+                self.batch_completed += 1
+                self.batch_failures += 1
+                self.progress.setValue(self.batch_completed)
+                self.process_next_batch_item()
+            else:
+                self.processing_source = None
+                self.set_busy(False)
+                self.status.setText("Processing failed")
+                QtWidgets.QMessageBox.critical(self, "OCR failed", message)
+
+        def finish_batch(self, stopped=False):
+            total = self.batch_total
+            completed = self.batch_completed
+            failures = self.batch_failures
+            self.batch_queue = []
+            self.batch_total = 0
+            self.processing_source = None
+            self.stop_requested = False
+            self.set_busy(False)
+            self.progress.setRange(0, total or 1)
+            self.progress.setValue(completed)
+            outcome = "Stopped" if stopped else "Batch complete"
+            self.status.setText(
+                f"{outcome}: {completed} of {total} attempted; {failures} failed")
 
         def export(self):
             if self.record is None: return

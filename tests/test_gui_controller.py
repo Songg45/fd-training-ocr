@@ -7,7 +7,7 @@ from fd_training_ocr.config import AppConfig
 from fd_training_ocr.gui_controller import (GuiPaths, apply_facilities_edit, apply_gui_edit,
                                              build_processor, display_value, effective_facilities,
                                              discover_pdfs, export_record, index_after_removal, structured_rows,
-                                             validate_pdf, validate_pdfs)
+                                             unprocessed_sources, validate_pdf, validate_pdfs)
 
 
 class GuiControllerTests(unittest.TestCase):
@@ -39,6 +39,11 @@ class GuiControllerTests(unittest.TestCase):
         self.assertEqual(index_after_removal(1, 2), 1)
         self.assertEqual(index_after_removal(2, 2), 1)
         self.assertEqual(index_after_removal(0, 0), -1)
+
+    def test_batch_selection_skips_completed_records_and_preserves_order(self):
+        first, second, third = Path("1.pdf"), Path("2.pdf"), Path("3.pdf")
+        self.assertEqual(unprocessed_sources([first, second, third], {second: {}}),
+                         (first, third))
 
     def test_display_value_uses_review_resolution_order(self):
         self.assertEqual(display_value({"raw":"a", "normalized":"b", "resolved_value":"c", "reviewed_value":"d"}), "d")
