@@ -188,6 +188,30 @@ def _partial_stage3_roster_pair(name: str | None, unit: str | None,
     return scored[0][1]
 
 
+def _three_position_roster_pair(name: str | None, unit: str | None,
+                                roster: Roster | None):
+    """Resolve one wrong ID character only when a unique close name corroborates it."""
+    if not roster or not name or not unit:
+        return None
+    observed = re.sub(r"[^A-Za-z0-9]", "", unit).casefold()
+    if len(observed) != 4:
+        return None
+    name_suggestion, ambiguous, _ = roster.suggest_name(name, threshold=.80)
+    member = roster.member_for_name(name_suggestion)
+    if ambiguous or member is None:
+        return None
+    name_score = max(SequenceMatcher(None, name.strip().casefold(), candidate.casefold()).ratio()
+                     for candidate in (member.name, *member.aliases))
+    if name_score < .80:
+        return None
+    matching_units = []
+    for candidate in member.unit_ids:
+        canonical = re.sub(r"[^A-Za-z0-9]", "", candidate).casefold()
+        if len(canonical) == 4 and sum(a == b for a, b in zip(observed, canonical)) >= 3:
+            matching_units.append(candidate)
+    return member if len(matching_units) == 1 else None
+
+
 def _stage_pair(result: RecognitionResult) -> tuple[str | None, str | None]:
     attempts = result.attempts
     return (attempts[0].get("value") if attempts else result.value,
@@ -446,6 +470,13 @@ def verify_second_pass(page: Image.Image, template: TemplateDefinition,
             if len(exact_member.unit_ids) == 1:
                 matched_member = exact_member
                 matched_reason = "exact roster name in an independent reading resolved attendee pair"
+        elif supports and len(three_position_members := {
+                member for observed_name, observed_unit in (
+                    (name1, unit1), (name2, unit2), (name_value, unit_value))
+                if (member := _three_position_roster_pair(
+                    observed_name, observed_unit, roster)) is not None}) == 1:
+            matched_member = next(iter(three_position_members))
+            matched_reason = "three matching unit-ID positions and close name resolved roster member"
         elif (partial_member := _partial_stage3_roster_pair(name_value, unit_value, roster)) is not None:
             matched_member = partial_member
             matched_reason = "Stage 3 name fragment and unit suffix agreed on unique roster member"
