@@ -1,0 +1,36 @@
+# Sensitive source material and derived artifacts
+input/
+inputs/
+output/*
+!output/.gitkeep
+**/crops/
+**/signatures/
+**/review-artifacts/
+*.pdf
+
+# Local data, logs, credentials, and configuration overrides
+*.db
+*.sqlite*
+*.log
+.env
+.env.*
+!.env.example
+config.local.toml
+
+# Python tooling
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+dist/
+build/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

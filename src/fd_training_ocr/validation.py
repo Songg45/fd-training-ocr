@@ -1,0 +1,1 @@
+"""Validation boundary (future checkpoint)."""
