@@ -10,7 +10,7 @@ import sys
 import tempfile
 
 from .config import load_config
-from .gui_controller import (GuiPaths, build_processor, export_record, process_pdf,
+from .gui_controller import (GuiPaths, apply_gui_edit, build_processor, export_record, process_pdf,
                              structured_rows, validate_pdf)
 from .pdf_render import render_pdf
 
@@ -93,9 +93,11 @@ def main(argv=None) -> int:
             self.preview = Preview(); splitter.addWidget(self.preview)
             tabs = QtWidgets.QTabWidget(); splitter.addWidget(tabs); splitter.setSizes([700, 650])
             self.table = QtWidgets.QTableWidget(0, 3)
-            self.table.setHorizontalHeaderLabels(["Field", "Result", "Warnings"])
+            self.table.setHorizontalHeaderLabels(["Field", "Result (editable)", "Warnings"])
             self.table.horizontalHeader().setStretchLastSection(True)
-            self.table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+            self.table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.DoubleClicked |
+                                       QtWidgets.QAbstractItemView.EditTrigger.EditKeyPressed)
+            self.table.itemChanged.connect(self.result_edited)
             tabs.addTab(self.table, "Structured Results")
             self.raw = QtWidgets.QPlainTextEdit(); self.raw.setReadOnly(True)
             tabs.addTab(self.raw, "Raw JSON")
@@ -143,13 +145,36 @@ def main(argv=None) -> int:
 
         def finished(self, record):
             self.record = record; self.raw.setPlainText(json.dumps(record, indent=2, ensure_ascii=False))
-            rows = structured_rows(record); self.table.setRowCount(len(rows))
+            rows = structured_rows(record); self.table.blockSignals(True); self.table.setRowCount(len(rows))
             for row, values in enumerate(rows):
-                for column, value in enumerate(values): self.table.setItem(row, column, QtWidgets.QTableWidgetItem(value))
+                name, value, warnings, editable = values
+                for column, text in enumerate((name, value, warnings)):
+                    item = QtWidgets.QTableWidgetItem(text)
+                    item.setToolTip(text)
+                    if column != 1 or not editable:
+                        item.setFlags(item.flags() & ~QtCore.Qt.ItemFlag.ItemIsEditable)
+                    elif editable:
+                        item.setData(QtCore.Qt.ItemDataRole.UserRole, name)
+                    self.table.setItem(row, column, item)
+            self.table.blockSignals(False)
             needs_review = record.get("status") == "review_required"
             self.warning.setText("REVIEW REQUIRED — " + ("; ".join(record.get("warnings", ())) or "one or more fields require review"))
             self.warning.setVisible(needs_review); self.status.setText("Complete — review required" if needs_review else "Complete")
             self.set_busy(False)
+
+        def result_edited(self, item):
+            if self.record is None or item.column() != 1:
+                return
+            field_name = item.data(QtCore.Qt.ItemDataRole.UserRole)
+            if not field_name:
+                return
+            try:
+                apply_gui_edit(self.record, str(field_name), item.text())
+                self.raw.setPlainText(json.dumps(self.record, indent=2, ensure_ascii=False))
+                self.status.setText(f"Edited {field_name}; machine result preserved")
+                self.export_button.setEnabled(True)
+            except ValueError as exc:
+                QtWidgets.QMessageBox.critical(self, "Invalid correction", str(exc))
 
         @QtCore.Slot(str)
         def failed(self, message):

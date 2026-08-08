@@ -4,7 +4,7 @@ import tempfile
 import unittest
 
 from fd_training_ocr.config import AppConfig
-from fd_training_ocr.gui_controller import (GuiPaths, build_processor, display_value,
+from fd_training_ocr.gui_controller import (GuiPaths, apply_gui_edit, build_processor, display_value,
                                              export_record, structured_rows, validate_pdf)
 
 
@@ -20,8 +20,30 @@ class GuiControllerTests(unittest.TestCase):
         self.assertEqual(display_value({"raw":"a", "normalized":"b", "resolved_value":None}), "b")
 
     def test_structured_rows_include_field_warnings(self):
-        rows = structured_rows({"fields":{"date":{"normalized":"12/17/25", "warnings":["check date"]}}})
-        self.assertEqual(rows, (("date", "12/17/25", "check date"),))
+        rows = structured_rows({"fields":{"date":{"normalized":"12/17/25", "warnings":["check date"],
+                                                           "stage_3": "12/17/25",
+                                                           "second_pass_review_required": False}},
+                                "event":{"training_types":["new_driver"], "facilities":[],
+                                         "trucks_used":["Brush 54"], "total_hours_calculated":1.0,
+                                         "second_pass_call_count":1}})
+        self.assertEqual(rows[0], ("date", "12/17/25", "check date", True))
+        self.assertIn(("Training type", "New Driver", "", False), rows)
+        self.assertIn(("Truck", "Brush 54", "", False), rows)
+        self.assertIn(("Facilities", "None selected", "", False), rows)
+        self.assertIn(("Calculated duration", "1.0 hour", "", False), rows)
+        self.assertIn(("Stage 3 resolution", "1 call; 1 field resolved; 0 unresolved", "", False), rows)
+
+    def test_gui_edit_preserves_machine_values_and_records_review(self):
+        record = {"fields":{"instructor":{"raw":"Nick Sleder", "resolved_value":"Nick Sledge",
+                                                "reviewed_value":None}},
+                  "review":{"status":"pending", "corrections_applied":False, "reviewed_at":None}}
+        apply_gui_edit(record, "instructor", "Nicholas Sledge", "2026-08-08T12:00:00Z")
+        self.assertEqual(record["fields"]["instructor"]["raw"], "Nick Sleder")
+        self.assertEqual(record["fields"]["instructor"]["resolved_value"], "Nick Sledge")
+        self.assertEqual(record["fields"]["instructor"]["reviewed_value"], "Nicholas Sledge")
+        self.assertEqual(record["fields"]["instructor"]["review"],
+                         {"status":"corrected", "reviewed_at":"2026-08-08T12:00:00Z"})
+        self.assertTrue(record["review"]["corrections_applied"])
 
     def test_export_writes_exact_json_record(self):
         record = {"status":"review_required", "warnings":["check"]}

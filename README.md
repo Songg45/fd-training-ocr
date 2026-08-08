@@ -89,9 +89,12 @@ contents or its path.
 
 The optional PySide6 desktop front end processes one PDF at a time while retaining the
 tested CLI pipeline. It shows a zoomable and pannable page preview on the left and
-read-only structured results plus the complete JSON record on the right. OCR runs on a
-worker thread, and a prominent banner identifies records requiring human review. Export
-Results saves the currently displayed, signature-free JSON record to a chosen location.
+editable structured field results plus the complete JSON record on the right. Training
+type, truck, facilities, calculated duration, and Stage-3 resolution status appear as
+read-only summary rows. OCR runs in a background executor while all Qt work remains on
+the main thread, and a prominent banner identifies records requiring human review. Edits
+are stored as separate reviewed values without replacing machine evidence. Export Results
+saves the currently displayed, signature-free JSON record to a chosen location.
 
 Launch it with the same local master, template, configuration, and Poppler executable used
 by the CLI:
@@ -108,9 +111,8 @@ Stages 1 and 2 use `ollama_model` (`qwen2.5vl:7b` by default); exception-only St
 `ollama_stage3_model` (`qwen3-vl:8b-instruct` by default). Both endpoints remain restricted
 to loopback. The preview is rendered into a temporary local directory and deleted when the
 window closes. The existing pipeline masks signature regions before retaining aligned
-artifacts or sending crops to Ollama. This checkpoint is intentionally read-only: it does
-not yet edit corrections, highlight source regions, process multiple pages/forms, or
-provide packaging automation.
+artifacts or sending crops to Ollama. This checkpoint does not yet highlight source
+regions, process multiple pages/forms, or provide packaging automation.
 
 Prepare a local master (the output directory is ignored by Git):
 

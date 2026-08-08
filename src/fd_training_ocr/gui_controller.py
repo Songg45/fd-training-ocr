@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 import json
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, MutableMapping
 
 from .config import AppConfig
 from .export import FormRecord, source_sha256
@@ -36,13 +37,55 @@ def display_value(field: Mapping[str, Any]) -> Any:
     return None
 
 
-def structured_rows(record: Mapping[str, Any]) -> tuple[tuple[str, str, str], ...]:
+def _labels(values: Any) -> str:
+    if not values:
+        return "None selected"
+    return ", ".join(str(value).replace("_", " ").title() for value in values)
+
+
+def _counted(value: Any, singular: str) -> str:
+    return f"{value} {singular if value == 1 else singular + 's'}"
+
+
+def structured_rows(record: Mapping[str, Any]) -> tuple[tuple[str, str, str, bool], ...]:
     rows = []
     for name, field in record.get("fields", {}).items():
         warnings = field.get("warnings", ())
         rows.append((str(name), "" if display_value(field) is None else str(display_value(field)),
-                     "; ".join(str(item) for item in warnings)))
+                     "; ".join(str(item) for item in warnings), True))
+    event = record.get("event", {})
+    calculated = event.get("total_hours_calculated")
+    rows.extend((
+        ("Training type", _labels(event.get("training_types")), "", False),
+        ("Truck", _labels(event.get("trucks_used")), "", False),
+        ("Facilities", _labels(event.get("facilities")), "", False),
+        ("Calculated duration", "" if calculated is None else _counted(calculated, "hour"), "", False),
+    ))
+    stage3_fields = [field for field in record.get("fields", {}).values()
+                     if field.get("stage_3") is not None]
+    unresolved = sum(bool(field.get("second_pass_review_required")) for field in stage3_fields)
+    calls = event.get("second_pass_call_count", 0)
+    resolved = len(stage3_fields) - unresolved
+    rows.append(("Stage 3 resolution", f"{_counted(calls, 'call')}; {_counted(resolved, 'field')} resolved; "
+                 f"{unresolved} unresolved", "", False))
     return tuple(rows)
+
+
+def apply_gui_edit(record: MutableMapping[str, Any], field_name: str, value: str,
+                   reviewed_at: str | None = None) -> None:
+    """Store a GUI correction separately without changing machine evidence."""
+    fields = record.get("fields")
+    if not isinstance(fields, MutableMapping) or field_name not in fields:
+        raise ValueError(f"unknown reviewed field: {field_name}")
+    field = fields[field_name]
+    if not isinstance(field, MutableMapping):
+        raise ValueError(f"invalid reviewed field: {field_name}")
+    stamp = reviewed_at or datetime.now(timezone.utc).isoformat()
+    field["reviewed_value"] = value if value != "" else None
+    field["review"] = {"status": "corrected", "reviewed_at": stamp}
+    review = record.setdefault("review", {})
+    review["corrections_applied"] = True
+    review["reviewed_at"] = stamp
 
 
 def export_record(record: Mapping[str, Any], destination: Path) -> Path:
