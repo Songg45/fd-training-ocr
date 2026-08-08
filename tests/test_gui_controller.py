@@ -5,6 +5,7 @@ import unittest
 
 from fd_training_ocr.config import AppConfig
 from fd_training_ocr.gui_controller import (GuiPaths, apply_facilities_edit, apply_gui_edit,
+                                             automatic_export, automatic_export_stem,
                                              build_processor, display_value, effective_facilities,
                                              discover_pdfs, export_record, index_after_removal, structured_rows,
                                              unprocessed_sources, validate_pdf, validate_pdfs)
@@ -96,6 +97,24 @@ class GuiControllerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             destination = export_record(record, Path(directory) / "result.json")
             self.assertEqual(json.loads(destination.read_text(encoding="utf-8")), record)
+
+    def test_automatic_export_uses_iso_date_and_avoids_collisions(self):
+        first = {"source_file":"one.pdf", "source_sha256":"aaa",
+                 "fields":{"date":{"normalized":"12/17/25"}}}
+        second = {"source_file":"two.pdf", "source_sha256":"bbb",
+                  "fields":{"date":{"reviewed_value":"12/17/2025"}}}
+        self.assertEqual(automatic_export_stem(first), "2025-12-17")
+        with tempfile.TemporaryDirectory() as directory:
+            first_path = automatic_export(first, Path(directory))
+            retry_path = automatic_export(first, Path(directory))
+            second_path = automatic_export(second, Path(directory))
+            self.assertEqual(first_path.name, "2025-12-17.json")
+            self.assertEqual(retry_path, first_path)
+            self.assertEqual(second_path.name, "2025-12-17-2.json")
+
+    def test_automatic_export_uses_source_name_when_date_is_invalid(self):
+        record = {"source_file":"Scan 17 (copy).pdf", "fields":{"date":{"raw":"unknown"}}}
+        self.assertEqual(automatic_export_stem(record), "undated-Scan-17-copy")
 
     def test_processor_routes_two_models(self):
         calls = []

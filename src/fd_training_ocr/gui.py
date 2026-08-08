@@ -11,7 +11,8 @@ import tempfile
 
 from .config import load_config
 from .gui_controller import (FACILITY_LABELS, GuiPaths, apply_facilities_edit, apply_gui_edit,
-                             build_processor, effective_facilities, export_record, process_pdf,
+                             automatic_export, build_processor, effective_facilities,
+                             export_record, process_pdf,
                              discover_pdfs, index_after_removal, structured_rows,
                              unprocessed_sources, validate_pdfs)
 from .pdf_render import render_pdf
@@ -32,6 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--template", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--pdftoppm", type=Path)
+    parser.add_argument("--export-dir", type=Path, default=Path(r"C:\Temp\Exported"))
     return parser
 
 
@@ -325,6 +327,7 @@ def main(argv=None) -> int:
             self.update_navigation()
 
         def finished(self, source, record):
+            exported = automatic_export(record, args.export_dir)
             self.records[source] = record
             self.failures.pop(source, None)
             self.record = record
@@ -336,6 +339,7 @@ def main(argv=None) -> int:
             else:
                 self.processing_source = None
                 self.set_busy(False)
+                self.status.setText(f"Complete — exported {exported.name}")
 
         def display_record(self, record):
             self.raw.setPlainText(json.dumps(record, indent=2, ensure_ascii=False))
@@ -365,11 +369,12 @@ def main(argv=None) -> int:
                 return
             try:
                 apply_gui_edit(self.record, str(field_name), item.text())
+                automatic_export(self.record, args.export_dir)
                 self.raw.setPlainText(json.dumps(self.record, indent=2, ensure_ascii=False))
-                self.status.setText(f"Edited {field_name}; machine result preserved")
+                self.status.setText(f"Edited {field_name}; automatic export updated")
                 self.export_button.setEnabled(True)
-            except ValueError as exc:
-                QtWidgets.QMessageBox.critical(self, "Invalid correction", str(exc))
+            except (OSError, ValueError) as exc:
+                QtWidgets.QMessageBox.critical(self, "Unable to save correction", str(exc))
 
         def summary_activated(self, row, column):
             item = self.table.item(row, 1)
@@ -393,10 +398,15 @@ def main(argv=None) -> int:
             layout.addWidget(buttons)
             if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
                 return
-            apply_facilities_edit(self.record, [key for key, check in checks.items() if check.isChecked()])
-            self.display_record(self.record)
-            self.status.setText("Edited Facilities; machine result preserved")
-            self.export_button.setEnabled(True)
+            try:
+                apply_facilities_edit(
+                    self.record, [key for key, check in checks.items() if check.isChecked()])
+                automatic_export(self.record, args.export_dir)
+                self.display_record(self.record)
+                self.status.setText("Edited Facilities; automatic export updated")
+                self.export_button.setEnabled(True)
+            except (OSError, ValueError) as exc:
+                QtWidgets.QMessageBox.critical(self, "Unable to save correction", str(exc))
 
         def failed(self, source, message):
             self.failures[source] = message

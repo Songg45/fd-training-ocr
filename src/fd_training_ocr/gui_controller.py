@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 from typing import Any, Callable, Mapping, MutableMapping
 
 from .config import AppConfig
@@ -164,6 +165,41 @@ def export_record(record: Mapping[str, Any], destination: Path) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8")
     return destination
+
+
+def automatic_export_stem(record: Mapping[str, Any]) -> str:
+    """Build a Windows-safe, sortable filename stem from the reviewed/effective date."""
+    field = record.get("fields", {}).get("date", {})
+    value = display_value(field) if isinstance(field, Mapping) else None
+    if value is not None:
+        text = str(value).strip()
+        for date_format in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y"):
+            try:
+                return datetime.strptime(text, date_format).date().isoformat()
+            except ValueError:
+                pass
+    source_stem = Path(str(record.get("source_file", "form"))).stem
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", source_stem).strip(".-") or "form"
+    return f"undated-{safe}"
+
+
+def automatic_export(record: Mapping[str, Any], directory: Path) -> Path:
+    """Export without overwriting a different form that has the same training date."""
+    directory = directory.expanduser().resolve()
+    stem = automatic_export_stem(record)
+    candidate = directory / f"{stem}.json"
+    suffix = 2
+    while candidate.exists():
+        try:
+            existing = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            existing = {}
+        if (record.get("source_sha256") and
+                existing.get("source_sha256") == record.get("source_sha256")):
+            break
+        candidate = directory / f"{stem}-{suffix}.json"
+        suffix += 1
+    return export_record(record, candidate)
 
 
 def build_processor(config: AppConfig, paths: GuiPaths,
