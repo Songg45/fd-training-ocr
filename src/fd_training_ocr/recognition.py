@@ -279,10 +279,10 @@ class OllamaVisionProvider:
         raw = self._chat(request.prompt, request.image)
         return parse_response(raw, request, self.name, self.model)
 
-    def _chat(self, prompt: str, image: Image.Image) -> str:
+    def _chat(self, prompt: str, image: Image.Image, format_spec: object = "json") -> str:
         buffer = BytesIO()
         image.save(buffer, format="PNG")
-        body = json.dumps({"model": self.model, "stream": False, "format": "json",
+        body = json.dumps({"model": self.model, "stream": False, "format": format_spec,
                            "messages": [{"role": "user", "content": prompt,
                                          "images": [base64.b64encode(buffer.getvalue()).decode("ascii")]}],
                            "options": {"temperature": 0}}).encode("utf-8")
@@ -299,8 +299,25 @@ class OllamaVisionProvider:
         return raw
 
     def verify_context(self, request: ContextVerificationRequest) -> ContextVerificationResult:
-        return parse_context_response(self._chat(request.prompt, request.image), request,
+        return parse_context_response(self._chat(request.prompt, request.image,
+                                                  _context_json_schema(request.schema)), request,
                                       self.name, self.model)
+
+
+def _context_json_schema(schema: str) -> dict[str, object]:
+    value_keys = {"time_group": ("start_time", "end_time", "total_hours"),
+                  "instructor": ("instructor",),
+                  "attendee_row": ("unit_id", "print_name"), "field": ("value",)}[schema]
+    properties: dict[str, object] = {
+        key: {"type": ["string", "null"]} for key in value_keys}
+    properties["alternatives"] = {"type": "object", "additionalProperties": False,
+        "properties": {key: {"type": "array", "items": {"type": "string"}} for key in value_keys},
+        "required": list(value_keys)}
+    if schema == "time_group": properties["internally_consistent"] = {"type": "boolean"}
+    if schema in {"instructor", "attendee_row"}:
+        properties["handwriting_supports_candidate"] = {"type": "boolean"}
+    return {"type": "object", "additionalProperties": False, "properties": properties,
+            "required": list(properties)}
 
 
 def parse_context_response(raw: str, request: ContextVerificationRequest,
