@@ -33,6 +33,14 @@ def normalize_date(raw: str | None) -> NormalizedValue:
     return NormalizedValue(raw, None, False, "unrecognized or invalid date")
 
 
+def canonical_date(raw: str | None) -> str | None:
+    """Return a valid date in the application's canonical MM/DD/YY format."""
+    normalized = normalize_date(raw)
+    if not normalized.valid or normalized.normalized is None:
+        return None
+    return datetime.fromisoformat(normalized.normalized).strftime("%m/%d/%y")
+
+
 def normalize_time(raw: str | None) -> NormalizedValue:
     if result := _empty(raw): return result
     text = re.sub(r"\s+", "", raw).upper().replace(".", "")

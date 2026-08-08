@@ -87,6 +87,12 @@ class GuiControllerTests(unittest.TestCase):
                          {"status":"corrected", "reviewed_at":"2026-08-08T12:00:00Z"})
         self.assertTrue(record["review"]["corrections_applied"])
 
+    def test_gui_date_edit_is_saved_as_mm_dd_yy(self):
+        record = {"fields":{"date":{"raw":"12/1/2025", "reviewed_value":None}},
+                  "review":{"corrections_applied":False, "reviewed_at":None}}
+        apply_gui_edit(record, "date", "12/1/2025", "2026-08-08T12:00:00Z")
+        self.assertEqual(record["fields"]["date"]["reviewed_value"], "12/01/25")
+
     def test_unit_id_edit_updates_attendee_name_from_exact_roster_match(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

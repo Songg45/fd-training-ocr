@@ -13,6 +13,7 @@ from .checkbox_detection import detect_options
 from .export import FormRecord
 from .pdf_render import render_pdf
 from .recognition import RecognitionProvider, recognize_fields
+from .normalization import canonical_date
 from .review import mask_signature_column
 from .second_pass import verify_second_pass
 from .table_extraction import contiguous_populated_rows, detect_populated_rows
@@ -94,6 +95,9 @@ def processor_factory(*, work_dir: Path, master_path: Path, template_path: Path,
                 "first_pass_warnings": list(by_first_assessment[item.field_name].warnings),
                 "review": {"status": "unreviewed", "reviewed_at": None}}
             resolution = second_pass.resolutions.get(item.field_name)
+            resolved_value = resolution.resolved_value if resolution else None
+            if item.field_name == "date" and resolved_value is not None:
+                resolved_value = canonical_date(resolved_value)
             fields[item.field_name].update({
                 "first_pass": item.value,
                 "stage_1": item.attempts[0] if item.attempts else None,
@@ -104,7 +108,7 @@ def processor_factory(*, work_dir: Path, master_path: Path, template_path: Path,
                 "second_pass": resolution.second_pass if resolution else None,
                 "second_pass_attempts": list(resolution.attempts) if resolution else [],
                 "roster_suggestion": resolution.roster_suggestion if resolution else assessment.suggested_canonical,
-                "resolved_value": resolution.resolved_value if resolution else None,
+                "resolved_value": resolved_value,
                 "resolution_reason": resolution.resolution_reason if resolution else None,
                 "second_pass_review_required": resolution.review_required if resolution else False,
             })

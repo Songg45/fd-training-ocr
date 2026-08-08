@@ -1,7 +1,8 @@
 import unittest
 
 from fd_training_ocr.normalization import (normalize_aliased_allowlisted, normalize_allowlisted,
-                                           normalize_date, normalize_hours, normalize_time)
+                                           canonical_date, normalize_date, normalize_hours,
+                                           normalize_time)
 
 
 class NormalizationTests(unittest.TestCase):
@@ -9,6 +10,8 @@ class NormalizationTests(unittest.TestCase):
         value = normalize_date("12/17/25")
         self.assertEqual((value.raw, value.normalized, value.valid), ("12/17/25", "2025-12-17", True))
         self.assertEqual(normalize_date("12-17-25").normalized, "2025-12-17")
+        self.assertEqual(canonical_date("12/1/2025"), "12/01/25")
+        self.assertEqual(canonical_date("12-1-25"), "12/01/25")
 
     def test_invalid_date_is_not_rewritten(self):
         value = normalize_date("LZ//WOES")

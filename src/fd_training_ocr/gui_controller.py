@@ -11,6 +11,7 @@ from typing import Any, Callable, Mapping, MutableMapping
 
 from .config import AppConfig
 from .export import FormRecord, source_sha256
+from .normalization import canonical_date
 from .pipeline import processor_factory
 from .recognition import OllamaVisionProvider
 from .validation import ValidationPolicy, load_roster
@@ -174,6 +175,11 @@ def apply_gui_edit(record: MutableMapping[str, Any], field_name: str, value: str
     field = fields[field_name]
     if not isinstance(field, MutableMapping):
         raise ValueError(f"invalid reviewed field: {field_name}")
+    if field_name == "date" and value:
+        formatted = canonical_date(value)
+        if formatted is None:
+            raise ValueError("date must be a valid MM/DD/YY date")
+        value = formatted
     stamp = reviewed_at or datetime.now(timezone.utc).isoformat()
     field["reviewed_value"] = value if value != "" else None
     field["review"] = {"status": "corrected", "reviewed_at": stamp}
@@ -287,6 +293,10 @@ def accept_stage3_suggestion(record: MutableMapping[str, Any], field_name: str,
     fields = record.get("fields")
     if not isinstance(fields, MutableMapping) or not isinstance(fields.get(field_name), MutableMapping):
         raise ValueError(f"unknown reviewed field: {field_name}")
+    if field_name == "date":
+        suggestion = canonical_date(str(suggestion))
+        if suggestion is None:
+            raise ValueError("Stage 3 date is not a complete valid date")
     stamp = reviewed_at or datetime.now(timezone.utc).isoformat()
     field = fields[field_name]
     field["reviewed_value"] = suggestion
