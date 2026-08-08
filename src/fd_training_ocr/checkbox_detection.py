@@ -79,6 +79,18 @@ def detect_options(master: Image.Image, completed: Image.Image,
     # localized difference signal. This handles light pencil strokes whose net
     # ink is cancelled out by small scan/alignment brightness differences.
     facilities = [score for score in scores if score.name.startswith("facility.")]
+    facilities_training = next(
+        (score for score in scores if score.name == "training_type.facilities"), None)
+    if (facilities and facilities_training and facilities_training.selected
+            and not any(score.selected for score in facilities)):
+        ranked = sorted(facilities, key=lambda score: score.added_ink_ratio, reverse=True)
+        best = ranked[0]
+        runner_up = ranked[1].added_ink_ratio if len(ranked) > 1 else float("-inf")
+        if (best.difference_ratio >= .045 and best.added_ink_ratio >= .008
+                and best.added_ink_ratio - runner_up >= .008):
+            scores = tuple(replace(score, selected=True) if score.name == best.name else score
+                           for score in scores)
+            facilities = [score for score in scores if score.name.startswith("facility.")]
     if facilities and any(score.selected for score in facilities):
         unselected = [score for score in facilities if not score.selected]
         if unselected:

@@ -256,6 +256,22 @@ class SecondPassTests(unittest.TestCase):
         self.assertEqual(instructor.resolved_value, "Samantha Gibson")
         self.assertFalse(instructor.review_required)
 
+    def test_repeated_exact_name_overrides_conflicting_unit_ids(self):
+        roster = Roster((RosterMember("Brandon Tucker", ("4554",)),
+                         RosterMember("Samantha Gibson", ("7554",))))
+        first = (result("attendee.01.unit_id", "4554", stage2="2554"),
+                 result("attendee.01.print_name", "Samantha Gibson"))
+        initial = validate(first, roster=roster)
+        provider = MockRecognitionProvider(context_responses={"attendee.01": {
+            "unit_id": "4554", "print_name": "Samantha Gibson",
+            "handwriting_supports_candidate": True,
+            "alternatives": {"unit_id": [], "print_name": []}}})
+        verified = verify_second_pass(Image.new("L", (1000, 1000), 255), template(),
+                                      provider, first, initial, roster)
+        self.assertEqual(verified.resolutions["attendee.01.unit_id"].resolved_value, "7554")
+        self.assertEqual(verified.resolutions["attendee.01.print_name"].resolved_value,
+                         "Samantha Gibson")
+
     def test_only_disagreeing_generic_field_triggers_stage3(self):
         first = (result("date", "12/17/25", stage2="12/11/25"),
                  result("description", "Synthetic drill"))

@@ -370,6 +370,14 @@ def verify_second_pass(page: Image.Image, template: TemplateDefinition,
         trigger = any(_requires_stage3(name, first[name], assessments[name], validation.warnings)
                       for name in (unit_name, print_name))
         if not trigger: continue
+        # Never present Stage 3 with a synthetic pair assembled from two
+        # different roster members. That can turn conflicting evidence into a
+        # confidently repeated but impossible attendee identity.
+        candidate_unit_member = roster.member_for_unit(unit_candidate) if roster else None
+        candidate_name_member = roster.member_for_name(name_candidate) if roster else None
+        if (candidate_unit_member is not None and candidate_name_member is not None
+                and candidate_unit_member != candidate_name_member):
+            unit_candidate = None
         candidates = [{"unit_id": unit_candidate, "print_name": name_candidate}]
         candidates = [x for x in candidates if x["unit_id"] or x["print_name"]]
         prompt = ("Read only the unit ID and printed name from this attendee row; the excluded rightmost column is absent. "
@@ -396,6 +404,12 @@ def verify_second_pass(page: Image.Image, template: TemplateDefinition,
         name_member = roster.member_for_name(name_value) if roster and name_value else None
         exact_name_members = ({member for value in (name1, name2, name_value)
                                if roster and (member := roster.member_for_name(value)) is not None})
+        repeated_exact_name_member = None
+        if roster:
+            name1_member = roster.member_for_name(name1)
+            name2_member = roster.member_for_name(name2)
+            if name1_member is not None and name1_member == name2_member:
+                repeated_exact_name_member = name1_member
         stage2_pair_member = _strong_stage2_roster_pair(name2, unit2, roster)
         stage23_name_member = None
         if roster:
@@ -410,7 +424,12 @@ def verify_second_pass(page: Image.Image, template: TemplateDefinition,
                     stage23_name_member = name2_member
         matched_member = None
         matched_reason = None
-        if stage23_name_member is not None:
+        if (repeated_exact_name_member is not None and unit1 and unit2
+                and unit1.strip().casefold() != unit2.strip().casefold()
+                and len(repeated_exact_name_member.unit_ids) == 1):
+            matched_member = repeated_exact_name_member
+            matched_reason = "two exact name readings overrode conflicting unit ID readings"
+        elif stage23_name_member is not None:
             matched_member = stage23_name_member
             matched_reason = "Stage 2 and Stage 3 exact name plus earlier unit suffix resolved roster member"
         elif stage2_pair_member is not None:

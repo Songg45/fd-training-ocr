@@ -93,6 +93,25 @@ class CheckboxDetectionTests(unittest.TestCase):
         selected = {score.name for score in scores if score.selected}
         self.assertEqual(selected, {"facility.classroom", "facility.outside_area"})
 
+    def test_training_type_context_recovers_single_faint_facility(self) -> None:
+        master, completed = pages(set())
+        multi_definition = TemplateDefinition(
+            "synthetic", "v1", "normalized_xywh", (400, 200), frozenset(), {}, (
+                Region("training_type.facilities", "option", (.01, .01, .1, .1), {}),
+                Region("facility.classroom", "option", (.12, .01, .1, .1), {}),
+                Region("facility.drill_ground", "option", (.23, .01, .1, .1), {}),
+                Region("facility.outside_area", "option", (.34, .01, .1, .1), {}),
+            ))
+        synthetic = (
+            OptionScore("training_type.facilities", 75, 1000, .07526, .02488, True),
+            OptionScore("facility.classroom", 51, 1000, .05140, .01238, False),
+            OptionScore("facility.drill_ground", 43, 1000, .04314, .00040, False),
+            OptionScore("facility.outside_area", 42, 1000, .04276, -.00090, False),
+        )
+        with patch("fd_training_ocr.checkbox_detection.score_option", side_effect=synthetic):
+            scores = detect_options(master, completed, multi_definition)
+        self.assertIn("facility.classroom", {score.name for score in scores if score.selected})
+
 
 if __name__ == "__main__":
     unittest.main()
