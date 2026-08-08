@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -61,6 +62,14 @@ class TableExtractionTests(unittest.TestCase):
         score = detect_populated_rows(master, completed, definition(),
                                       threshold=1.0, difference_threshold=.01)[0]
         self.assertTrue(score.populated)
+
+    def test_grid_difference_with_negative_added_ink_does_not_populate_rows(self) -> None:
+        master = Image.new("L", (500, 300), 160)
+        completed = Image.new("L", (500, 300), 255)
+        with patch("fd_training_ocr.table_extraction.difference_mask",
+                   side_effect=lambda a, b: np.ones((a.height, a.width), dtype=bool)):
+            scores = detect_populated_rows(master, completed, definition())
+        self.assertFalse(any(score.populated for score in scores))
 
 
 if __name__ == "__main__":
