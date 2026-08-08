@@ -104,6 +104,8 @@ class RecognitionTests(unittest.TestCase):
         self.assertEqual(result.value, "01/02/26")
         self.assertEqual([x.attempt for x in provider.requests], [1, 2, 3])
         self.assertEqual([x["variant"] for x in result.attempts], ["raw", "raw", "raw"])
+        self.assertEqual([(x["provider"], x["model"]) for x in result.attempts],
+                         [("sequence", "test")] * 3)
         self.assertGreater(provider.requests[2].image.width, provider.requests[1].image.width)
 
 

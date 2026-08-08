@@ -202,6 +202,7 @@ def _acceptable(result: RecognitionResult) -> bool:
 
 def _attempt_record(result: RecognitionResult, request: RecognitionRequest) -> dict[str, object]:
     return {"attempt": request.attempt, "variant": request.variant,
+            "provider": result.provider, "model": result.model,
             "source_region": list(request.source_region), "value": result.value,
             "confidence": result.confidence, "alternatives": list(result.alternatives),
             "raw_output": result.raw_output}
