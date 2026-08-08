@@ -28,7 +28,8 @@ class RowScore:
 
 
 def detect_populated_rows(master: Image.Image, completed: Image.Image,
-                          template: TemplateDefinition, threshold: float = 0.030
+                          template: TemplateDefinition, threshold: float = 0.030,
+                          difference_threshold: float = 0.060
                           ) -> tuple[RowScore, ...]:
     """Score rows using only unit ID and print-name cells; signatures are ignored."""
     if master.size != completed.size:
@@ -51,9 +52,13 @@ def detect_populated_rows(master: Image.Image, completed: Image.Image,
         cells = by_row[row]
         if set(cells) != {"unit_id", "print_name"}:
             raise ValueError(f"attendee row {row} lacks unit_id or print_name")
+        max_added = max(cells["unit_id"].added_ink_ratio,
+                        cells["print_name"].added_ink_ratio)
+        max_difference = max(cells["unit_id"].difference_ratio,
+                             cells["print_name"].difference_ratio)
         results.append(RowScore(row, cells["unit_id"], cells["print_name"],
-                                max(cells["unit_id"].added_ink_ratio,
-                                    cells["print_name"].added_ink_ratio) >= threshold))
+                                max_added >= threshold
+                                or max_difference >= difference_threshold))
     return tuple(results)
 
 

@@ -8,6 +8,8 @@ from fd_training_ocr.gui_controller import (GuiPaths, accept_stage3_suggestion, 
                                              apply_event_selection,
                                              apply_facilities_edit, apply_gui_edit,
                                              apply_roster_linked_unit_edit,
+                                             populate_name_from_roster_unit,
+                                             populate_unit_from_roster_name,
                                              automatic_export, automatic_export_stem,
                                              build_processor, display_value, effective_event_selection,
                                              effective_facilities,
@@ -107,6 +109,65 @@ class GuiControllerTests(unittest.TestCase):
                 "2026-08-08T12:00:00Z")
             self.assertEqual(matched, "Diane Brown")
             self.assertEqual(record["fields"]["attendee.03.unit_id"]["reviewed_value"], "6854")
+            self.assertEqual(record["fields"]["attendee.03.print_name"]["reviewed_value"],
+                             "Diane Brown")
+            self.assertEqual(record["attendees"][0],
+                             {"row": 3, "unit_id": "6854", "print_name": "Diane Brown"})
+
+    def test_roster_name_populates_single_unit_id_after_stage3_acceptance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = root / "repo"; repository.mkdir()
+            roster_path = root / "roster.json"
+            roster_path.write_text(json.dumps({
+                "schema_version": 1,
+                "members": [{"name": "Samantha Gibson", "unit_ids": ["7254"],
+                             "aliases": ["Sam Gibson"]}],
+            }), encoding="utf-8")
+            record = {
+                "fields": {
+                    "attendee.01.unit_id": {"raw": "7Z54", "reviewed_value": None},
+                    "attendee.01.print_name": {"raw": "Samantha C", "reviewed_value": None,
+                        "stage_3": "Samantha Gibson", "second_pass_review_required": True},
+                },
+                "attendees": [{"row": 1, "unit_id": "7Z54", "print_name": "Samantha C"}],
+                "review": {"corrections_applied": False, "reviewed_at": None},
+            }
+            stamp = "2026-08-08T12:00:00Z"
+            accept_stage3_suggestion(record, "attendee.01.print_name", stamp)
+            unit = populate_unit_from_roster_name(
+                record, "attendee.01.print_name", "Samantha Gibson",
+                roster_path, repository, stamp)
+            self.assertEqual(unit, "7254")
+            self.assertEqual(record["fields"]["attendee.01.unit_id"]["reviewed_value"], "7254")
+            self.assertEqual(record["attendees"][0],
+                             {"row": 1, "unit_id": "7254", "print_name": "Samantha Gibson"})
+
+    def test_roster_unit_populates_name_after_stage3_acceptance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = root / "repo"; repository.mkdir()
+            roster_path = root / "roster.json"
+            roster_path.write_text(json.dumps({
+                "schema_version": 1,
+                "members": [{"name": "Diane Brown", "unit_ids": ["6854"], "aliases": []}],
+            }), encoding="utf-8")
+            record = {
+                "fields": {
+                    "attendee.03.unit_id": {"raw": "G854", "reviewed_value": None,
+                        "stage_3": "6854", "second_pass_review_required": True},
+                    "attendee.03.print_name": {"raw": "Vigne Starnos", "reviewed_value": None},
+                },
+                "attendees": [{"row": 3, "unit_id": "G854", "print_name": "Vigne Starnos"}],
+                "review": {"corrections_applied": False, "reviewed_at": None},
+            }
+            stamp = "2026-08-08T12:00:00Z"
+            accept_stage3_suggestion(record, "attendee.03.unit_id", stamp)
+            name = populate_name_from_roster_unit(
+                record, "attendee.03.unit_id", "6854", roster_path, repository, stamp)
+            self.assertEqual(name, "Diane Brown")
+            self.assertEqual(record["fields"]["attendee.03.unit_id"]["review"]["source"],
+                             "stage_3")
             self.assertEqual(record["fields"]["attendee.03.print_name"]["reviewed_value"],
                              "Diane Brown")
             self.assertEqual(record["attendees"][0],

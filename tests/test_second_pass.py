@@ -121,7 +121,7 @@ class SecondPassTests(unittest.TestCase):
         first = (result("instructor", "Samantha C"),)
         report = validate(first, roster=roster)
         provider = MockRecognitionProvider(context_responses={"instructor": {
-            "instructor": "Samantha Gild", "handwriting_supports_candidate": True,
+            "instructor": "Samantha Gild", "handwriting_supports_candidate": False,
             "alternatives": {"instructor": []}}})
         verified = verify_second_pass(Image.new("L", (1000, 1000), 255), template(), provider,
                                       first, report, roster)

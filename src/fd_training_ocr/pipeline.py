@@ -59,7 +59,8 @@ def processor_factory(*, work_dir: Path, master_path: Path, template_path: Path,
         draw_region_overlay(page, safe_regions, aligned.overlay_path)
         option_scores = detect_options(master, page, definition)
         selected = [x.name for x in option_scores if x.selected]
-        populated = [x.row for x in detect_populated_rows(master, page, definition) if x.populated]
+        row_scores = detect_populated_rows(master, page, definition)
+        populated = [x.row for x in row_scores if x.populated]
         recognized = recognize_fields(page, master, definition, provider, populated,
             crop_padding=recognition_crop_padding, max_attempts=recognition_max_attempts)
         apparatus_map = {"truck.engine54":"Engine 54", "truck.tanker54":"Tanker 54", "truck.engine254":"Engine 254", "truck.brush54":"Brush 54", "truck.tanker854":"Tanker 854"}
@@ -133,7 +134,14 @@ def processor_factory(*, work_dir: Path, master_path: Path, template_path: Path,
                 "difference_ratio": round(score.difference_ratio, 5),
                 "added_ink_ratio": round(score.added_ink_ratio, 5),
                 "selected": score.selected,
-            } for score in option_scores}}
+            } for score in option_scores},
+            "attendee_row_scores": {str(score.row): {
+                "unit_id_difference_ratio": round(score.unit_id.difference_ratio, 5),
+                "unit_id_added_ink_ratio": round(score.unit_id.added_ink_ratio, 5),
+                "print_name_difference_ratio": round(score.print_name.difference_ratio, 5),
+                "print_name_added_ink_ratio": round(score.print_name.added_ink_ratio, 5),
+                "populated": score.populated,
+            } for score in row_scores}}
         return FormRecord(path.name, digest, 1, definition.form_type, definition.form_version,
             "review_required" if review_required else "succeeded", fields, event, tuple(attendees), tuple(warnings),
             {"status": "pending" if review_required else "not_required", "corrections_applied": False, "reviewed_at": None})

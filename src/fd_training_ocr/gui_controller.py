@@ -214,6 +214,62 @@ def apply_roster_linked_unit_edit(record: MutableMapping[str, Any], field_name: 
     return canonical_name
 
 
+def populate_unit_from_roster_name(record: MutableMapping[str, Any], field_name: str,
+                                   value: str, roster_path: Path,
+                                   repository_root: Path,
+                                   reviewed_at: str | None = None) -> str | None:
+    """Fill an attendee ID when an edited/accepted name exactly identifies one ID."""
+    match = re.fullmatch(r"attendee\.(\d+)\.print_name", field_name)
+    if match is None:
+        raise ValueError(f"not an attendee print-name field: {field_name}")
+    roster = load_roster(roster_path, repository_root)
+    member = roster.member_for_name(value)
+    unit_id = member.unit_ids[0] if member is not None and len(member.unit_ids) == 1 else None
+    row = int(match.group(1))
+    if unit_id is not None:
+        apply_gui_edit(record, f"attendee.{row:02d}.unit_id", unit_id, reviewed_at)
+    attendees = []
+    for attendee in record.get("attendees", ()):
+        if isinstance(attendee, Mapping) and attendee.get("row") == row:
+            updated = dict(attendee)
+            updated["print_name"] = value
+            if unit_id is not None:
+                updated["unit_id"] = unit_id
+            attendees.append(updated)
+        else:
+            attendees.append(attendee)
+    record["attendees"] = attendees
+    return unit_id
+
+
+def populate_name_from_roster_unit(record: MutableMapping[str, Any], field_name: str,
+                                   value: str, roster_path: Path,
+                                   repository_root: Path,
+                                   reviewed_at: str | None = None) -> str | None:
+    """Fill an attendee name when an edited/accepted ID has one exact roster match."""
+    match = re.fullmatch(r"attendee\.(\d+)\.unit_id", field_name)
+    if match is None:
+        raise ValueError(f"not an attendee unit ID field: {field_name}")
+    roster = load_roster(roster_path, repository_root)
+    member = roster.member_for_unit(value)
+    canonical_name = member.name if member is not None else None
+    row = int(match.group(1))
+    if canonical_name is not None:
+        apply_gui_edit(record, f"attendee.{row:02d}.print_name", canonical_name, reviewed_at)
+    attendees = []
+    for attendee in record.get("attendees", ()):
+        if isinstance(attendee, Mapping) and attendee.get("row") == row:
+            updated = dict(attendee)
+            updated["unit_id"] = value
+            if canonical_name is not None:
+                updated["print_name"] = canonical_name
+            attendees.append(updated)
+        else:
+            attendees.append(attendee)
+    record["attendees"] = attendees
+    return canonical_name
+
+
 def stage3_suggestion(record: Mapping[str, Any], field_name: str) -> Any:
     field = record.get("fields", {}).get(field_name)
     if (not isinstance(field, Mapping) or not field.get("second_pass_review_required")

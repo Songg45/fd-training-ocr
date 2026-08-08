@@ -13,6 +13,8 @@ from .config import load_config
 from .gui_controller import (EVENT_SELECTIONS, GuiPaths, accept_stage3_suggestion,
                              apply_event_selection, apply_gui_edit,
                              apply_roster_linked_unit_edit,
+                             populate_name_from_roster_unit,
+                             populate_unit_from_roster_name,
                              automatic_export, build_processor, effective_event_selection,
                              export_record, load_gui_state, process_pdf, save_gui_state,
                              discover_pdfs, index_after_removal, structured_rows,
@@ -537,12 +539,29 @@ def main(argv=None) -> int:
             if self.record is None or not field_name:
                 return
             try:
+                suggestion = stage3_suggestion(self.record, field_name)
                 accept_stage3_suggestion(self.record, field_name)
+                roster_unit = None
+                roster_name = None
+                if (field_name.endswith(".print_name") and suggestion is not None
+                        and config.roster_path is not None):
+                    roster_unit = populate_unit_from_roster_name(
+                        self.record, field_name, str(suggestion),
+                        config.roster_path, Path.cwd())
+                elif (field_name.endswith(".unit_id") and suggestion is not None
+                      and config.roster_path is not None):
+                    roster_name = populate_name_from_roster_unit(
+                        self.record, field_name, str(suggestion),
+                        config.roster_path, Path.cwd())
                 automatic_export(self.record, args.export_dir)
                 self.persist_state()
                 self.display_record(self.record)
+                suffix = (f"; roster set Unit ID to {roster_unit}"
+                          if roster_unit is not None else
+                          (f"; roster set name to {roster_name}"
+                           if roster_name is not None else ""))
                 self.status.setText(
-                    f"Accepted Stage 3 suggestion for {field_name}; automatic export updated")
+                    f"Accepted Stage 3 suggestion for {field_name}{suffix}; automatic export updated")
             except (OSError, ValueError) as exc:
                 QtWidgets.QMessageBox.critical(
                     self, "Unable to accept Stage 3 suggestion", str(exc))
@@ -682,19 +701,28 @@ def main(argv=None) -> int:
             if field_name in EVENT_SELECTIONS:
                 return
             try:
-                canonical_name = None
+                roster_message = None
                 if (str(field_name).endswith(".unit_id")
                         and config.roster_path is not None):
                     canonical_name = apply_roster_linked_unit_edit(
                         self.record, str(field_name), item.text(),
                         config.roster_path, Path.cwd())
+                    if canonical_name is not None:
+                        roster_message = f"roster set name to {canonical_name}"
+                elif (str(field_name).endswith(".print_name")
+                      and config.roster_path is not None):
+                    apply_gui_edit(self.record, str(field_name), item.text())
+                    roster_unit = populate_unit_from_roster_name(
+                        self.record, str(field_name), item.text(),
+                        config.roster_path, Path.cwd())
+                    if roster_unit is not None:
+                        roster_message = f"roster set Unit ID to {roster_unit}"
                 else:
                     apply_gui_edit(self.record, str(field_name), item.text())
                 automatic_export(self.record, args.export_dir)
                 self.persist_state()
                 self.display_record(self.record)
-                suffix = (f"; roster set name to {canonical_name}"
-                          if canonical_name is not None else "")
+                suffix = f"; {roster_message}" if roster_message is not None else ""
                 self.status.setText(
                     f"Edited {field_name}{suffix}; automatic export updated")
                 self.export_button.setEnabled(True)

@@ -56,6 +56,12 @@ class TableExtractionTests(unittest.TestCase):
         self.assertLess(result[35].sum(), 20)
         self.assertGreater(result.sum(), 100)
 
+    def test_localized_difference_can_populate_row_when_net_ink_is_low(self) -> None:
+        master, completed = pages({1})
+        score = detect_populated_rows(master, completed, definition(),
+                                      threshold=1.0, difference_threshold=.01)[0]
+        self.assertTrue(score.populated)
+
 
 if __name__ == "__main__":
     unittest.main()

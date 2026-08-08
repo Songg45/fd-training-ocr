@@ -224,8 +224,8 @@ def verify_second_pass(page: Image.Image, template: TemplateDefinition,
             supports=bool(result and result.handwriting_supports_candidate))
         instructor_value = result.values["instructor"] if result else None
         resolution = resolutions["instructor"]
-        if (roster and result and result.handwriting_supports_candidate
-                and resolution.resolved_value is None and instructor.raw and instructor_value):
+        if (roster and result and resolution.resolved_value is None
+                and instructor.raw and instructor_value):
             first_suggestion, first_ambiguous, _ = roster.suggest_name(instructor.raw)
             stage3_suggestion, stage3_ambiguous, _ = roster.suggest_name(instructor_value)
             if (first_suggestion and first_suggestion == stage3_suggestion
