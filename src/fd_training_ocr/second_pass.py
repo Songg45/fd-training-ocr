@@ -291,6 +291,16 @@ def verify_second_pass(page: Image.Image, template: TemplateDefinition,
         elif name_member and unit_member is None and len(name_member.unit_ids) == 1:
             matched_member = name_member
             matched_reason = "exact Stage 3 roster name or alias resolved attendee pair"
+        elif (roster and supports and unit_member is None and name_member is None
+              and name_assessment.raw and name_value):
+            first_suggestion, first_ambiguous, _ = roster.suggest_name(name_assessment.raw)
+            stage3_suggestion, stage3_ambiguous, _ = roster.suggest_name(name_value)
+            if (first_suggestion and first_suggestion == stage3_suggestion
+                    and not first_ambiguous and not stage3_ambiguous):
+                fuzzy_member = roster.member_for_name(first_suggestion)
+                if fuzzy_member is not None and len(fuzzy_member.unit_ids) == 1:
+                    matched_member = fuzzy_member
+                    matched_reason = "independent fuzzy name readings resolved unique roster member"
         if matched_member is not None:
             roster_unit = next((unit for unit in matched_member.unit_ids
                                 if unit_value and unit.casefold() == unit_value.strip().casefold()),
