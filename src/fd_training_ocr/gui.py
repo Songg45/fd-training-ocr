@@ -12,7 +12,7 @@ import tempfile
 from .config import load_config
 from .gui_controller import (FACILITY_LABELS, GuiPaths, apply_facilities_edit, apply_gui_edit,
                              automatic_export, build_processor, effective_facilities,
-                             export_record, process_pdf,
+                             export_record, load_gui_state, process_pdf, save_gui_state,
                              discover_pdfs, index_after_removal, structured_rows,
                              unprocessed_sources, validate_pdfs)
 from .pdf_render import render_pdf
@@ -34,6 +34,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--pdftoppm", type=Path)
     parser.add_argument("--export-dir", type=Path, default=Path(r"C:\Temp\Exported"))
+    parser.add_argument("--state-file", type=Path,
+                        default=Path(r"C:\Temp\fd-training-ocr-gui-state.json"))
     return parser
 
 
@@ -140,6 +142,31 @@ def main(argv=None) -> int:
             self.process_all_button.clicked.connect(self.process_all)
             self.stop_button.clicked.connect(self.request_stop)
             self.export_button.clicked.connect(self.export)
+            self.restore_state()
+
+        def restore_state(self):
+            try:
+                sources, current_index, records, failures = load_gui_state(args.state_file)
+                self.sources = sources
+                self.current_index = current_index
+                self.records = records
+                self.failures = failures
+                if self.current_index >= 0:
+                    self.show_current()
+                    self.status.setText(
+                        f"Restored {len(self.sources)} queued PDF"
+                        f"{'s' if len(self.sources) != 1 else ''}")
+                else:
+                    self.update_navigation()
+            except (OSError, ValueError) as exc:
+                self.status.setText(f"Unable to restore queue: {exc}")
+
+        def persist_state(self):
+            try:
+                save_gui_state(args.state_file, self.sources, self.current_index,
+                               self.records, self.failures)
+            except OSError as exc:
+                self.status.setText(f"Unable to save queue state: {exc}")
 
         def load_pdfs(self):
             names, _ = QtWidgets.QFileDialog.getOpenFileNames(self, "Add training forms", "", "PDF files (*.pdf)")
@@ -157,6 +184,7 @@ def main(argv=None) -> int:
                 elif self.current_index < 0:
                     self.current_index = 0
                 self.show_current()
+                self.persist_state()
             except Exception as exc:
                 QtWidgets.QMessageBox.critical(self, "Unable to load PDF", str(exc))
 
@@ -185,6 +213,7 @@ def main(argv=None) -> int:
                     f"Added {len(additions)} PDF{'s' if len(additions) != 1 else ''} from folder; "
                     f"skipped {skipped} duplicate{'s' if skipped != 1 else ''}")
                 self.update_navigation()
+                self.persist_state()
             except Exception as exc:
                 QtWidgets.QMessageBox.critical(self, "Unable to load folder", str(exc))
 
@@ -194,6 +223,7 @@ def main(argv=None) -> int:
                 self.current_index = target
                 try:
                     self.show_current()
+                    self.persist_state()
                 except Exception as exc:
                     QtWidgets.QMessageBox.critical(self, "Unable to load PDF", str(exc))
 
@@ -217,6 +247,7 @@ def main(argv=None) -> int:
                 self.warning.hide()
                 self.status.setText("Queue empty — load a PDF to begin")
                 self.update_navigation()
+            self.persist_state()
 
         def show_current(self):
             self.source = self.sources[self.current_index]
@@ -330,6 +361,7 @@ def main(argv=None) -> int:
             exported = automatic_export(record, args.export_dir)
             self.records[source] = record
             self.failures.pop(source, None)
+            self.persist_state()
             self.record = record
             self.display_record(record)
             if self.batch_total:
@@ -370,6 +402,7 @@ def main(argv=None) -> int:
             try:
                 apply_gui_edit(self.record, str(field_name), item.text())
                 automatic_export(self.record, args.export_dir)
+                self.persist_state()
                 self.raw.setPlainText(json.dumps(self.record, indent=2, ensure_ascii=False))
                 self.status.setText(f"Edited {field_name}; automatic export updated")
                 self.export_button.setEnabled(True)
@@ -402,6 +435,7 @@ def main(argv=None) -> int:
                 apply_facilities_edit(
                     self.record, [key for key, check in checks.items() if check.isChecked()])
                 automatic_export(self.record, args.export_dir)
+                self.persist_state()
                 self.display_record(self.record)
                 self.status.setText("Edited Facilities; automatic export updated")
                 self.export_button.setEnabled(True)
@@ -410,6 +444,7 @@ def main(argv=None) -> int:
 
         def failed(self, source, message):
             self.failures[source] = message
+            self.persist_state()
             if self.batch_total:
                 self.batch_completed += 1
                 self.batch_failures += 1
@@ -435,6 +470,7 @@ def main(argv=None) -> int:
             outcome = "Stopped" if stopped else "Batch complete"
             self.status.setText(
                 f"{outcome}: {completed} of {total} attempted; {failures} failed")
+            self.persist_state()
 
         def export(self):
             if self.record is None: return
@@ -449,6 +485,7 @@ def main(argv=None) -> int:
             if self.future is not None and not self.future.done():
                 event.ignore(); QtWidgets.QMessageBox.information(self, "Processing", "Wait for local OCR to finish before closing."); return
             self.poll_timer.stop()
+            self.persist_state()
             self.executor.shutdown(wait=False, cancel_futures=True)
             self.preview_temp.cleanup(); super().closeEvent(event)
 

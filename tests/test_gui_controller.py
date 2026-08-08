@@ -8,7 +8,8 @@ from fd_training_ocr.gui_controller import (GuiPaths, apply_facilities_edit, app
                                              automatic_export, automatic_export_stem,
                                              build_processor, display_value, effective_facilities,
                                              discover_pdfs, export_record, index_after_removal, structured_rows,
-                                             unprocessed_sources, validate_pdf, validate_pdfs)
+                                             load_gui_state, save_gui_state, unprocessed_sources,
+                                             validate_pdf, validate_pdfs)
 
 
 class GuiControllerTests(unittest.TestCase):
@@ -115,6 +116,33 @@ class GuiControllerTests(unittest.TestCase):
     def test_automatic_export_uses_source_name_when_date_is_invalid(self):
         record = {"source_file":"Scan 17 (copy).pdf", "fields":{"date":{"raw":"unknown"}}}
         self.assertEqual(automatic_export_stem(record), "undated-Scan-17-copy")
+
+    def test_gui_state_round_trip_restores_results_failures_and_position(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = root / "first.pdf"; first.write_bytes(b"%PDF")
+            second = root / "second.pdf"; second.write_bytes(b"%PDF")
+            state_file = root / "state.json"
+            record = {"source_file":"first.pdf", "status":"succeeded"}
+            save_gui_state(state_file, [first, second], 1, {first:record}, {second:"bad scan"})
+            sources, index, records, failures = load_gui_state(state_file)
+            self.assertEqual(sources, [first.resolve(), second.resolve()])
+            self.assertEqual(index, 1)
+            self.assertEqual(records[first.resolve()], record)
+            self.assertEqual(failures[second.resolve()], "bad scan")
+
+    def test_gui_state_ignores_missing_pdfs_and_clamps_position(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            existing = root / "existing.pdf"; existing.write_bytes(b"%PDF")
+            missing = root / "missing.pdf"
+            state_file = root / "state.json"
+            save_gui_state(state_file, [missing, existing], 1, {}, {})
+            sources, index, records, failures = load_gui_state(state_file)
+            self.assertEqual(sources, [existing.resolve()])
+            self.assertEqual(index, 0)
+            self.assertEqual(records, {})
+            self.assertEqual(failures, {})
 
     def test_processor_routes_two_models(self):
         calls = []

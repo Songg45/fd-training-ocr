@@ -202,6 +202,68 @@ def automatic_export(record: Mapping[str, Any], directory: Path) -> Path:
     return export_record(record, candidate)
 
 
+def save_gui_state(state_file: Path, sources: list[Path] | tuple[Path, ...],
+                   current_index: int, records: Mapping[Path, Any],
+                   failures: Mapping[Path, str]) -> Path:
+    """Atomically persist the desktop queue without modifying any source PDF."""
+    destination = state_file.expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": 1,
+        "sources": [str(source.resolve()) for source in sources],
+        "current_index": current_index,
+        "records": {str(source.resolve()): record for source, record in records.items()
+                    if source in sources},
+        "failures": {str(source.resolve()): str(message) for source, message in failures.items()
+                     if source in sources},
+    }
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(destination)
+    return destination
+
+
+def load_gui_state(state_file: Path) -> tuple[list[Path], int, dict[Path, Any], dict[Path, str]]:
+    """Restore existing PDFs from a versioned state file and ignore stale paths."""
+    source = state_file.expanduser().resolve()
+    if not source.is_file():
+        return [], -1, {}, {}
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping) or payload.get("schema_version") != 1:
+        raise ValueError("unsupported GUI state file")
+    raw_sources = payload.get("sources")
+    if not isinstance(raw_sources, list):
+        raise ValueError("invalid GUI state sources")
+    sources = []
+    seen = set()
+    for raw_path in raw_sources:
+        try:
+            candidate = Path(str(raw_path)).expanduser().resolve()
+        except (OSError, ValueError):
+            continue
+        if (candidate not in seen and candidate.is_file()
+                and candidate.suffix.casefold() == ".pdf"):
+            sources.append(candidate)
+            seen.add(candidate)
+    records_payload = payload.get("records", {})
+    failures_payload = payload.get("failures", {})
+    records = {}
+    failures = {}
+    for candidate in sources:
+        key = str(candidate)
+        if isinstance(records_payload, Mapping) and isinstance(records_payload.get(key), Mapping):
+            records[candidate] = dict(records_payload[key])
+        if isinstance(failures_payload, Mapping) and failures_payload.get(key) is not None:
+            failures[candidate] = str(failures_payload[key])
+    requested_index = payload.get("current_index", 0)
+    try:
+        requested_index = int(requested_index)
+    except (TypeError, ValueError):
+        requested_index = 0
+    current_index = min(max(requested_index, 0), len(sources) - 1) if sources else -1
+    return sources, current_index, records, failures
+
+
 def build_processor(config: AppConfig, paths: GuiPaths,
                     provider_factory: Callable[..., Any] = OllamaVisionProvider):
     primary = provider_factory(config.ollama_model, config.ollama_endpoint,
