@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 import re
-from typing import Callable
+from typing import Callable, Mapping
 
 
 @dataclass(frozen=True)
@@ -61,6 +61,19 @@ def normalize_allowlisted(raw: str | None, allowed: tuple[str, ...]) -> Normaliz
     normalized = matches.get(raw.strip().casefold())
     return (NormalizedValue(raw, normalized, True) if normalized is not None else
             NormalizedValue(raw, raw.strip(), False, "value is not in configured allowlist"))
+
+
+def normalize_aliased_allowlisted(raw: str | None, allowed: tuple[str, ...],
+                                  aliases: Mapping[str, str] | tuple[tuple[str, str], ...]) -> NormalizedValue:
+    """Normalize configured aliases to a canonical allowlisted value."""
+    if result := _empty(raw): return result
+    canonical = {item.casefold(): item for item in allowed}
+    alias_items = aliases.items() if isinstance(aliases, Mapping) else aliases
+    for alias, target in alias_items:
+        canonical[alias.casefold()] = target
+    normalized = canonical.get(raw.strip().casefold())
+    return (NormalizedValue(raw, normalized, True) if normalized is not None else
+            NormalizedValue(raw, raw.strip(), False, "value is not in configured allowlist or aliases"))
 
 
 Normalizer = Callable[[str | None], NormalizedValue]

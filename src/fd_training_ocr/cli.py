@@ -101,7 +101,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 roster_path=config.roster_path, pdftoppm=args.pdftoppm,
                 recognition_crop_padding=config.recognition_crop_padding_pixels,
                 recognition_max_attempts=config.recognition_max_attempts,
-                policy=ValidationPolicy(apparatus=config.valid_apparatus, locations=config.valid_locations))
+                policy=ValidationPolicy(apparatus=config.valid_apparatus,
+                                        locations=config.valid_locations,
+                                        location_aliases=config.location_aliases))
             summary = run_batch(args.source, destination, processor)
         except (OSError, ValueError, TemplateError) as exc:
             print(json.dumps({"status":"failed", "error_type":type(exc).__name__, "message":str(exc)}), file=sys.stderr)

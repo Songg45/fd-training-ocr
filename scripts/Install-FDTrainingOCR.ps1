@@ -157,7 +157,8 @@ ollama_stage3_model = "qwen3-vl:8b-instruct"
 ollama_timeout_seconds = 180
 roster_path = "$(ConvertTo-TomlPath $rosterPath)"
 valid_apparatus = ["Engine 54", "Tanker 54", "Brush 54", "Engine 254", "Tanker 854", "Brush 254"]
-valid_locations = ["District"]
+valid_locations = ["District", "Pilot Fire Department"]
+location_aliases = { PFD = "Pilot Fire Department", "Pilot FD" = "Pilot Fire Department", "Pilot Fire Department" = "Pilot Fire Department" }
 "@
     Write-Utf8NoBom $configPath $configText
 } else { Write-Host "Preserving existing configuration: $configPath" }

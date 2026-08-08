@@ -34,6 +34,17 @@ class ConfigTests(unittest.TestCase):
             config = load_config(path)
         self.assertEqual((config.recognition_crop_padding_pixels, config.recognition_max_attempts), (20, 2))
 
+    def test_loads_location_aliases(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.toml"
+            path.write_text(
+                '[app]\nvalid_locations=["District", "Pilot Fire Department"]\n'
+                'location_aliases={PFD="Pilot Fire Department", "Pilot FD"="Pilot Fire Department"}\n',
+                encoding="utf-8")
+            config = load_config(path)
+        self.assertEqual(dict(config.location_aliases),
+                         {"PFD":"Pilot Fire Department", "Pilot FD":"Pilot Fire Department"})
+
     def test_rejects_unknown_keys(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.toml"

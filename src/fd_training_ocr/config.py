@@ -21,7 +21,12 @@ class AppConfig:
     ollama_timeout_seconds: float = 90.0
     roster_path: Path | None = None
     valid_apparatus: tuple[str, ...] = ("Engine 54", "Tanker 54", "Brush 54", "Engine 254", "Tanker 854", "Brush 254")
-    valid_locations: tuple[str, ...] = ("District",)
+    valid_locations: tuple[str, ...] = ("District", "Pilot Fire Department")
+    location_aliases: tuple[tuple[str, str], ...] = (
+        ("PFD", "Pilot Fire Department"),
+        ("Pilot FD", "Pilot Fire Department"),
+        ("Pilot Fire Department", "Pilot Fire Department"),
+    )
     recognition_crop_padding_pixels: int = 12
     recognition_max_attempts: int = 3
 
@@ -36,7 +41,7 @@ class AppConfig:
 def _build_config(values: Mapping[str, Any]) -> AppConfig:
     allowed = {"output_dir", "template_dir", "log_level", "offline",
                "ollama_endpoint", "ollama_model", "ollama_stage3_model", "ollama_timeout_seconds", "roster_path",
-               "valid_apparatus", "valid_locations", "recognition_crop_padding_pixels",
+               "valid_apparatus", "valid_locations", "location_aliases", "recognition_crop_padding_pixels",
                "recognition_max_attempts"}
     unknown = set(values) - allowed
     if unknown:
@@ -66,10 +71,16 @@ def _build_config(values: Mapping[str, Any]) -> AppConfig:
         raise ValueError("app.roster_path must be an absolute path")
     apparatus = values.get("valid_apparatus", list(AppConfig.valid_apparatus))
     locations = values.get("valid_locations", list(AppConfig.valid_locations))
+    location_aliases = values.get("location_aliases", dict(AppConfig.location_aliases))
     if not isinstance(apparatus, list) or not apparatus or not all(isinstance(x, str) and x.strip() for x in apparatus):
         raise ValueError("app.valid_apparatus must be a nonempty array of strings")
     if not isinstance(locations, list) or not locations or not all(isinstance(x, str) and x.strip() for x in locations):
         raise ValueError("app.valid_locations must be a nonempty array of strings")
+    if (not isinstance(location_aliases, dict)
+            or not all(isinstance(alias, str) and alias.strip()
+                       and isinstance(target, str) and target.strip()
+                       for alias, target in location_aliases.items())):
+        raise ValueError("app.location_aliases must be a table of string aliases to canonical strings")
     crop_padding = values.get("recognition_crop_padding_pixels", 12)
     max_attempts = values.get("recognition_max_attempts", 3)
     if isinstance(crop_padding, bool) or not isinstance(crop_padding, int) or not 0 <= crop_padding <= 100:
@@ -89,6 +100,7 @@ def _build_config(values: Mapping[str, Any]) -> AppConfig:
         roster_path=Path(roster_path) if roster_path else None,
         valid_apparatus=tuple(apparatus),
         valid_locations=tuple(locations),
+        location_aliases=tuple(location_aliases.items()),
         recognition_crop_padding_pixels=crop_padding,
         recognition_max_attempts=max_attempts,
     )

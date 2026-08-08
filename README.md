@@ -43,7 +43,8 @@ ollama_stage3_model = "qwen3-vl:8b-instruct"
 ollama_timeout_seconds = 90
 roster_path = "C:\\Temp\\fd-training-ocr-roster.json"
 valid_apparatus = ["Engine 54", "Tanker 54", "Brush 54", "Engine 254", "Tanker 854", "Brush 254"]
-valid_locations = ["District"]
+valid_locations = ["District", "Pilot Fire Department"]
+location_aliases = { PFD = "Pilot Fire Department", "Pilot FD" = "Pilot Fire Department", "Pilot Fire Department" = "Pilot Fire Department" }
 recognition_crop_padding_pixels = 12
 recognition_max_attempts = 3
 ```

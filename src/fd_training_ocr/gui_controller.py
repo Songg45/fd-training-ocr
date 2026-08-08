@@ -453,7 +453,8 @@ def build_processor(config: AppConfig, paths: GuiPaths,
         recognition_crop_padding=config.recognition_crop_padding_pixels,
         recognition_max_attempts=config.recognition_max_attempts,
         policy=ValidationPolicy(apparatus=config.valid_apparatus,
-                                locations=config.valid_locations))
+                                locations=config.valid_locations,
+                                location_aliases=config.location_aliases))
 
 
 def process_pdf(source: Path, processor: Callable[[Path, str], FormRecord]) -> dict[str, Any]:

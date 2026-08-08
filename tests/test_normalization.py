@@ -1,6 +1,7 @@
 import unittest
 
-from fd_training_ocr.normalization import normalize_allowlisted, normalize_date, normalize_hours, normalize_time
+from fd_training_ocr.normalization import (normalize_aliased_allowlisted, normalize_allowlisted,
+                                           normalize_date, normalize_hours, normalize_time)
 
 
 class NormalizationTests(unittest.TestCase):
@@ -16,3 +17,11 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual(normalize_time("4:00 PM").normalized, "16:00")
         self.assertEqual(normalize_hours("2.0").normalized, "2")
         self.assertEqual(normalize_allowlisted("district", ("District",)).normalized, "District")
+
+    def test_location_aliases_normalize_to_canonical_value(self):
+        aliases = {"PFD":"Pilot Fire Department", "Pilot FD":"Pilot Fire Department"}
+        for raw in ("PFD", "pfd", "Pilot FD", "Pilot Fire Department"):
+            value = normalize_aliased_allowlisted(
+                raw, ("District", "Pilot Fire Department"), aliases)
+            self.assertTrue(value.valid)
+            self.assertEqual(value.normalized, "Pilot Fire Department")

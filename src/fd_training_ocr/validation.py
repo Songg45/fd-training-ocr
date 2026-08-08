@@ -9,7 +9,8 @@ import json
 from pathlib import Path
 from typing import Iterable, Mapping
 
-from .normalization import NormalizedValue, normalize_allowlisted, normalize_date, normalize_hours, normalize_time
+from .normalization import (NormalizedValue, normalize_aliased_allowlisted, normalize_date,
+                            normalize_hours, normalize_time)
 from .recognition import RecognitionResult
 
 
@@ -84,7 +85,8 @@ class ValidationPolicy:
     allow_overnight: bool = False
     duration_tolerance_hours: float = .05
     apparatus: tuple[str, ...] = ("Engine 54", "Tanker 54", "Brush 54", "Engine 254", "Tanker 854", "Brush 254")
-    locations: tuple[str, ...] = ("District",)
+    locations: tuple[str, ...] = ("District", "Pilot Fire Department")
+    location_aliases: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -114,7 +116,8 @@ def _normalize(result: RecognitionResult, roster: Roster | None, policy: Validat
     if result.field_name == "date": return normalize_date(value)
     if result.field_name in {"start_time", "end_time"}: return normalize_time(value)
     if result.field_name == "total_hours": return normalize_hours(value)
-    if result.field_name == "location": return normalize_allowlisted(value, policy.locations)
+    if result.field_name == "location":
+        return normalize_aliased_allowlisted(value, policy.locations, policy.location_aliases)
     if (result.field_name.endswith(".print_name") or result.field_name == "instructor") and value and roster:
         match, _ = roster.match_name(value)
         return NormalizedValue(value, value.strip(), match is not None, None if match else "name not found uniquely in roster")
