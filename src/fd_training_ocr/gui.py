@@ -104,6 +104,7 @@ def main(argv=None) -> int:
             self.folder_button = QtWidgets.QPushButton("Add Folder")
             self.roster_button = QtWidgets.QPushButton("Roster")
             self.remove_button = QtWidgets.QPushButton("Remove PDF")
+            self.remove_all_button = QtWidgets.QPushButton("Remove All")
             self.previous_button = QtWidgets.QPushButton("Previous")
             self.next_button = QtWidgets.QPushButton("Next")
             self.page_label = QtWidgets.QLabel("0 of 0")
@@ -115,6 +116,7 @@ def main(argv=None) -> int:
             self.accept_stage3_button = QtWidgets.QPushButton("Accept Stage 3")
             self.export_button = QtWidgets.QPushButton("Export Results")
             self.remove_button.setEnabled(False)
+            self.remove_all_button.setEnabled(False)
             self.previous_button.setEnabled(False); self.next_button.setEnabled(False)
             self.process_button.setEnabled(False); self.process_all_button.setEnabled(False)
             self.stop_button.setEnabled(False); self.export_button.setEnabled(False)
@@ -125,6 +127,7 @@ def main(argv=None) -> int:
             self.status = QtWidgets.QLabel("Load a PDF to begin")
             for widget in (self.load_button, self.folder_button, self.roster_button,
                            self.remove_button,
+                           self.remove_all_button,
                            self.previous_button, self.page_label,
                            self.next_button, self.process_button, self.process_all_button,
                            self.stop_button, self.add_attendee_button,
@@ -152,6 +155,7 @@ def main(argv=None) -> int:
             self.folder_button.clicked.connect(self.load_folder)
             self.roster_button.clicked.connect(self.show_roster)
             self.remove_button.clicked.connect(self.remove_current_pdf)
+            self.remove_all_button.clicked.connect(self.remove_all_pdfs)
             self.previous_button.clicked.connect(lambda: self.navigate(-1))
             self.next_button.clicked.connect(lambda: self.navigate(1))
             self.process_button.clicked.connect(self.process)
@@ -355,6 +359,30 @@ def main(argv=None) -> int:
                 self.update_navigation()
             self.persist_state()
 
+        def remove_all_pdfs(self):
+            if self.busy or not self.sources:
+                return
+            answer = QtWidgets.QMessageBox.question(
+                self, "Remove all PDFs",
+                f"Remove all {len(self.sources)} PDFs from the GUI queue?\n\n"
+                "Source PDFs and exported JSON files will not be deleted.")
+            if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+                return
+            self.sources.clear()
+            self.records.clear()
+            self.failures.clear()
+            self.preview_paths.clear()
+            self.current_index = -1
+            self.source = None
+            self.record = None
+            self.preview.scene().clear()
+            self.raw.clear()
+            self.table.setRowCount(0)
+            self.warning.hide()
+            self.status.setText("Queue cleared — source PDFs and exports were preserved")
+            self.update_navigation()
+            self.persist_state()
+
         def show_current(self):
             self.source = self.sources[self.current_index]
             image_path = self.preview_paths.get(self.source)
@@ -387,6 +415,7 @@ def main(argv=None) -> int:
             self.previous_button.setEnabled(not self.busy and self.current_index > 0)
             self.next_button.setEnabled(not self.busy and 0 <= self.current_index < count - 1)
             self.remove_button.setEnabled(not self.busy and self.source is not None)
+            self.remove_all_button.setEnabled(not self.busy and bool(self.sources))
             self.process_button.setEnabled(not self.busy and self.source is not None)
             self.process_all_button.setEnabled(
                 not self.busy and bool(unprocessed_sources(self.sources, self.records)))
