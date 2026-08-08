@@ -13,7 +13,7 @@ from .config import AppConfig
 from .export import FormRecord, source_sha256
 from .pipeline import processor_factory
 from .recognition import OllamaVisionProvider
-from .validation import ValidationPolicy
+from .validation import ValidationPolicy, load_roster
 
 
 @dataclass(frozen=True)
@@ -262,6 +262,52 @@ def load_gui_state(state_file: Path) -> tuple[list[Path], int, dict[Path, Any], 
         requested_index = 0
     current_index = min(max(requested_index, 0), len(sources) - 1) if sources else -1
     return sources, current_index, records, failures
+
+
+def roster_table_rows(roster_path: Path, repository_root: Path) -> list[tuple[str, str, str]]:
+    """Load a validated external roster into editable table-shaped strings."""
+    roster = load_roster(roster_path, repository_root)
+    return [(member.name, ", ".join(member.unit_ids), ", ".join(member.aliases))
+            for member in roster.members]
+
+
+def _split_roster_values(value: str) -> list[str]:
+    return [item.strip() for item in re.split(r"[,;\n]+", value) if item.strip()]
+
+
+def save_roster_table(roster_path: Path, repository_root: Path,
+                      rows: list[tuple[str, str, str]]) -> Path:
+    """Validate and atomically save editable roster rows outside the repository."""
+    destination = roster_path.expanduser().resolve()
+    root = repository_root.expanduser().resolve()
+    if not roster_path.is_absolute() or destination == root or root in destination.parents:
+        raise ValueError("roster path must be absolute and outside the Git repository")
+    members = []
+    seen_units = {}
+    for row_number, (raw_name, raw_units, raw_aliases) in enumerate(rows, start=1):
+        name = raw_name.strip()
+        units = _split_roster_values(raw_units)
+        aliases = _split_roster_values(raw_aliases)
+        if not name and not units and not aliases:
+            continue
+        if not name or not units:
+            raise ValueError(f"roster row {row_number} requires a name and at least one unit ID")
+        for unit in units:
+            key = unit.casefold()
+            if key in seen_units:
+                raise ValueError(
+                    f"unit ID {unit} is duplicated by {seen_units[key]} and {name}")
+            seen_units[key] = name
+        members.append({"name": name, "unit_ids": units, "aliases": aliases})
+    if not members:
+        raise ValueError("roster must contain at least one member")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"schema_version": 1, "members": members}
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(destination)
+    load_roster(destination, root)
+    return destination
 
 
 def build_processor(config: AppConfig, paths: GuiPaths,

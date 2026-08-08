@@ -14,7 +14,8 @@ from .gui_controller import (FACILITY_LABELS, GuiPaths, apply_facilities_edit, a
                              automatic_export, build_processor, effective_facilities,
                              export_record, load_gui_state, process_pdf, save_gui_state,
                              discover_pdfs, index_after_removal, structured_rows,
-                             unprocessed_sources, validate_pdfs)
+                             roster_table_rows, save_roster_table, unprocessed_sources,
+                             validate_pdfs)
 from .pdf_render import render_pdf
 
 
@@ -98,6 +99,7 @@ def main(argv=None) -> int:
             controls = QtWidgets.QHBoxLayout(); layout.addLayout(controls)
             self.load_button = QtWidgets.QPushButton("Add PDFs")
             self.folder_button = QtWidgets.QPushButton("Add Folder")
+            self.roster_button = QtWidgets.QPushButton("Roster")
             self.remove_button = QtWidgets.QPushButton("Remove PDF")
             self.previous_button = QtWidgets.QPushButton("Previous")
             self.next_button = QtWidgets.QPushButton("Next")
@@ -112,7 +114,8 @@ def main(argv=None) -> int:
             self.stop_button.setEnabled(False); self.export_button.setEnabled(False)
             self.progress = QtWidgets.QProgressBar(); self.progress.setRange(0, 1); self.progress.setValue(0)
             self.status = QtWidgets.QLabel("Load a PDF to begin")
-            for widget in (self.load_button, self.folder_button, self.remove_button,
+            for widget in (self.load_button, self.folder_button, self.roster_button,
+                           self.remove_button,
                            self.previous_button, self.page_label,
                            self.next_button, self.process_button, self.process_all_button,
                            self.stop_button, self.export_button,
@@ -135,6 +138,7 @@ def main(argv=None) -> int:
             tabs.addTab(self.raw, "Raw JSON")
             self.load_button.clicked.connect(self.load_pdfs)
             self.folder_button.clicked.connect(self.load_folder)
+            self.roster_button.clicked.connect(self.show_roster)
             self.remove_button.clicked.connect(self.remove_current_pdf)
             self.previous_button.clicked.connect(lambda: self.navigate(-1))
             self.next_button.clicked.connect(lambda: self.navigate(1))
@@ -167,6 +171,93 @@ def main(argv=None) -> int:
                                self.records, self.failures)
             except OSError as exc:
                 self.status.setText(f"Unable to save queue state: {exc}")
+
+        def show_roster(self):
+            roster_path = config.roster_path
+            if roster_path is None:
+                QtWidgets.QMessageBox.critical(
+                    self, "Roster unavailable", "Configure an external roster_path first.")
+                return
+            dialog = QtWidgets.QDialog(self)
+            dialog.setWindowTitle(f"Roster — {roster_path}")
+            dialog.resize(900, 650)
+            layout = QtWidgets.QVBoxLayout(dialog)
+            path_label = QtWidgets.QLabel(f"Current roster: {roster_path}")
+            path_label.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+            layout.addWidget(path_label)
+            table = QtWidgets.QTableWidget(0, 3)
+            table.setHorizontalHeaderLabels(["Name", "Unit IDs (comma-separated)",
+                                              "Aliases (comma-separated)"])
+            table.horizontalHeader().setSectionResizeMode(
+                QtWidgets.QHeaderView.ResizeMode.Stretch)
+            table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+            layout.addWidget(table, 1)
+
+            def put_rows(rows):
+                table.setRowCount(len(rows))
+                for row_number, values in enumerate(rows):
+                    for column, value in enumerate(values):
+                        table.setItem(row_number, column, QtWidgets.QTableWidgetItem(value))
+
+            try:
+                put_rows(roster_table_rows(roster_path, Path.cwd()))
+            except (OSError, ValueError) as exc:
+                QtWidgets.QMessageBox.warning(dialog, "Unable to read roster", str(exc))
+
+            controls = QtWidgets.QHBoxLayout(); layout.addLayout(controls)
+            import_button = QtWidgets.QPushButton("Import Roster…")
+            add_button = QtWidgets.QPushButton("Add Row")
+            remove_button = QtWidgets.QPushButton("Remove Selected")
+            save_button = QtWidgets.QPushButton("Save Roster")
+            close_button = QtWidgets.QPushButton("Close")
+            for button in (import_button, add_button, remove_button, save_button, close_button):
+                controls.addWidget(button)
+
+            def import_roster():
+                name, _ = QtWidgets.QFileDialog.getOpenFileName(
+                    dialog, "Import roster", "", "Roster JSON (*.json)")
+                if not name:
+                    return
+                try:
+                    put_rows(roster_table_rows(Path(name), Path.cwd()))
+                    path_label.setText(
+                        f"Imported for review: {name}\nSave destination: {roster_path}")
+                except (OSError, ValueError) as exc:
+                    QtWidgets.QMessageBox.critical(dialog, "Invalid roster", str(exc))
+
+            def add_row():
+                row = table.rowCount(); table.insertRow(row)
+                for column in range(3):
+                    table.setItem(row, column, QtWidgets.QTableWidgetItem(""))
+                table.setCurrentCell(row, 0); table.editItem(table.item(row, 0))
+
+            def remove_rows():
+                selected = sorted({index.row() for index in table.selectionModel().selectedRows()},
+                                  reverse=True)
+                for row in selected:
+                    table.removeRow(row)
+
+            def save_roster():
+                rows = []
+                for row in range(table.rowCount()):
+                    rows.append(tuple(
+                        table.item(row, column).text() if table.item(row, column) else ""
+                        for column in range(3)))
+                try:
+                    destination = save_roster_table(roster_path, Path.cwd(), rows)
+                    path_label.setText(f"Current roster: {destination}")
+                    self.status.setText(f"Saved roster with {len(rows)} table rows")
+                    QtWidgets.QMessageBox.information(
+                        dialog, "Roster saved", "The updated roster will be used by the next OCR run.")
+                except (OSError, ValueError) as exc:
+                    QtWidgets.QMessageBox.critical(dialog, "Unable to save roster", str(exc))
+
+            import_button.clicked.connect(import_roster)
+            add_button.clicked.connect(add_row)
+            remove_button.clicked.connect(remove_rows)
+            save_button.clicked.connect(save_roster)
+            close_button.clicked.connect(dialog.accept)
+            dialog.exec()
 
         def load_pdfs(self):
             names, _ = QtWidgets.QFileDialog.getOpenFileNames(self, "Add training forms", "", "PDF files (*.pdf)")
@@ -352,6 +443,7 @@ def main(argv=None) -> int:
             self.busy = busy
             self.load_button.setEnabled(not busy)
             self.folder_button.setEnabled(not busy)
+            self.roster_button.setEnabled(not busy)
             if not busy and not self.batch_total:
                 self.progress.setRange(0, 1)
                 self.progress.setValue(1)

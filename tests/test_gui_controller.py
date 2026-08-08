@@ -9,6 +9,7 @@ from fd_training_ocr.gui_controller import (GuiPaths, apply_facilities_edit, app
                                              build_processor, display_value, effective_facilities,
                                              discover_pdfs, export_record, index_after_removal, structured_rows,
                                              load_gui_state, save_gui_state, unprocessed_sources,
+                                             roster_table_rows, save_roster_table,
                                              validate_pdf, validate_pdfs)
 
 
@@ -143,6 +144,24 @@ class GuiControllerTests(unittest.TestCase):
             self.assertEqual(index, 0)
             self.assertEqual(records, {})
             self.assertEqual(failures, {})
+
+    def test_editable_roster_round_trip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = root / "repo"; repository.mkdir()
+            roster_path = root / "roster.json"
+            rows = [("Nick Sledge", "4354", "Nicholas Sledge, N. Sledge"),
+                    ("Alex Myers", "JR7454", "")]
+            save_roster_table(roster_path, repository, rows)
+            self.assertEqual(roster_table_rows(roster_path, repository), rows)
+
+    def test_editable_roster_rejects_duplicate_ids(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = root / "repo"; repository.mkdir()
+            with self.assertRaisesRegex(ValueError, "duplicated"):
+                save_roster_table(root / "roster.json", repository,
+                                  [("One", "4554", ""), ("Two", "4554", "")])
 
     def test_processor_routes_two_models(self):
         calls = []
