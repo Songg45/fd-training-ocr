@@ -100,21 +100,40 @@ def main(argv=None) -> int:
             central = QtWidgets.QWidget(); self.setCentralWidget(central)
             layout = QtWidgets.QVBoxLayout(central)
             controls = QtWidgets.QHBoxLayout(); layout.addLayout(controls)
-            self.load_button = QtWidgets.QPushButton("Add PDFs")
-            self.folder_button = QtWidgets.QPushButton("Add Folder")
-            self.roster_button = QtWidgets.QPushButton("Roster")
-            self.remove_button = QtWidgets.QPushButton("Remove PDF")
-            self.remove_all_button = QtWidgets.QPushButton("Remove All")
+            self.load_button = QtGui.QAction("Add File(s)", self)
+            self.folder_button = QtGui.QAction("Add Folder", self)
+            self.roster_button = QtGui.QAction("Roster", self)
+            self.remove_button = QtGui.QAction("Remove PDF", self)
+            self.remove_all_button = QtGui.QAction("Remove All", self)
             self.previous_button = QtWidgets.QPushButton("Previous")
             self.next_button = QtWidgets.QPushButton("Next")
             self.page_label = QtWidgets.QLabel("0 of 0")
-            self.process_button = QtWidgets.QPushButton("Process")
-            self.process_all_button = QtWidgets.QPushButton("Process All")
-            self.stop_button = QtWidgets.QPushButton("Stop After Current")
-            self.delete_attendee_button = QtWidgets.QPushButton("Delete Attendee")
-            self.add_attendee_button = QtWidgets.QPushButton("Add Attendee")
+            self.process_button = QtGui.QAction("Process Selected", self)
+            self.process_all_button = QtGui.QAction("Process All", self)
+            self.stop_button = QtGui.QAction("Stop After Current", self)
+            self.delete_attendee_button = QtGui.QAction("Delete Attendee", self)
+            self.add_attendee_button = QtGui.QAction("Add Attendee", self)
             self.accept_stage3_button = QtWidgets.QPushButton("Accept Stage 3")
             self.export_button = QtWidgets.QPushButton("Export Results")
+
+            def menu_tool(text, actions):
+                tool = QtWidgets.QToolButton()
+                tool.setText(text)
+                tool.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+                menu = QtWidgets.QMenu(tool)
+                for action in actions:
+                    menu.addAction(action)
+                tool.setMenu(menu)
+                return tool
+
+            self.add_menu_button = menu_tool(
+                "Add", (self.load_button, self.folder_button, self.roster_button))
+            self.remove_menu_button = menu_tool(
+                "Remove", (self.remove_button, self.remove_all_button))
+            self.process_menu_button = menu_tool(
+                "Process", (self.process_button, self.process_all_button, self.stop_button))
+            self.attendees_menu_button = menu_tool(
+                "Attendees", (self.add_attendee_button, self.delete_attendee_button))
             self.remove_button.setEnabled(False)
             self.remove_all_button.setEnabled(False)
             self.previous_button.setEnabled(False); self.next_button.setEnabled(False)
@@ -125,13 +144,10 @@ def main(argv=None) -> int:
             self.accept_stage3_button.setEnabled(False)
             self.progress = QtWidgets.QProgressBar(); self.progress.setRange(0, 1); self.progress.setValue(0)
             self.status = QtWidgets.QLabel("Load a PDF to begin")
-            for widget in (self.load_button, self.folder_button, self.roster_button,
-                           self.remove_button,
-                           self.remove_all_button,
-                           self.previous_button, self.page_label,
-                           self.next_button, self.process_button, self.process_all_button,
-                           self.stop_button, self.add_attendee_button,
-                           self.delete_attendee_button, self.accept_stage3_button,
+            for widget in (self.add_menu_button, self.remove_menu_button,
+                           self.process_menu_button, self.attendees_menu_button,
+                           self.previous_button, self.page_label, self.next_button,
+                           self.accept_stage3_button,
                            self.export_button,
                            self.progress, self.status): controls.addWidget(widget)
             self.warning = QtWidgets.QLabel("")
@@ -151,18 +167,18 @@ def main(argv=None) -> int:
             tabs.addTab(self.table, "Structured Results")
             self.raw = QtWidgets.QPlainTextEdit(); self.raw.setReadOnly(True)
             tabs.addTab(self.raw, "Raw JSON")
-            self.load_button.clicked.connect(self.load_pdfs)
-            self.folder_button.clicked.connect(self.load_folder)
-            self.roster_button.clicked.connect(self.show_roster)
-            self.remove_button.clicked.connect(self.remove_current_pdf)
-            self.remove_all_button.clicked.connect(self.remove_all_pdfs)
+            self.load_button.triggered.connect(self.load_pdfs)
+            self.folder_button.triggered.connect(self.load_folder)
+            self.roster_button.triggered.connect(self.show_roster)
+            self.remove_button.triggered.connect(self.remove_current_pdf)
+            self.remove_all_button.triggered.connect(self.remove_all_pdfs)
             self.previous_button.clicked.connect(lambda: self.navigate(-1))
             self.next_button.clicked.connect(lambda: self.navigate(1))
-            self.process_button.clicked.connect(self.process)
-            self.process_all_button.clicked.connect(self.process_all)
-            self.stop_button.clicked.connect(self.request_stop)
-            self.delete_attendee_button.clicked.connect(self.delete_selected_attendee)
-            self.add_attendee_button.clicked.connect(self.add_attendee_dialog)
+            self.process_button.triggered.connect(self.process)
+            self.process_all_button.triggered.connect(self.process_all)
+            self.stop_button.triggered.connect(self.request_stop)
+            self.delete_attendee_button.triggered.connect(self.delete_selected_attendee)
+            self.add_attendee_button.triggered.connect(self.add_attendee_dialog)
             self.accept_stage3_button.clicked.connect(self.accept_selected_stage3)
             self.export_button.clicked.connect(self.export)
             self.restore_state()
@@ -424,6 +440,21 @@ def main(argv=None) -> int:
             self.export_button.setEnabled(not self.busy and self.record is not None)
             self.add_attendee_button.setEnabled(not self.busy and self.record is not None)
             self.update_selection_buttons()
+            self.update_menu_buttons()
+
+        def update_menu_buttons(self):
+            groups = (
+                (self.add_menu_button,
+                 (self.load_button, self.folder_button, self.roster_button)),
+                (self.remove_menu_button,
+                 (self.remove_button, self.remove_all_button)),
+                (self.process_menu_button,
+                 (self.process_button, self.process_all_button, self.stop_button)),
+                (self.attendees_menu_button,
+                 (self.add_attendee_button, self.delete_attendee_button)),
+            )
+            for tool, actions in groups:
+                tool.setEnabled(any(action.isEnabled() for action in actions))
 
         def add_attendee_dialog(self):
             if self.record is None:
@@ -497,6 +528,7 @@ def main(argv=None) -> int:
             suggestion = (stage3_suggestion(self.record, field_name)
                           if self.record is not None and field_name else None)
             self.accept_stage3_button.setEnabled(not self.busy and suggestion is not None)
+            self.update_menu_buttons()
 
         def accept_selected_stage3(self):
             field_name = self.selected_field_name()
@@ -580,6 +612,7 @@ def main(argv=None) -> int:
             if self.busy and self.batch_total:
                 self.stop_requested = True
                 self.stop_button.setEnabled(False)
+                self.update_menu_buttons()
                 self.status.setText("Stop requested — finishing the current PDF")
 
         @QtCore.Slot()
