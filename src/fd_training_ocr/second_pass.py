@@ -222,6 +222,18 @@ def verify_second_pass(page: Image.Image, template: TemplateDefinition,
         resolutions["instructor"] = _resolve("instructor", stage1, stage2,
             result.values["instructor"] if result else None, instructor_candidate, attempt,
             supports=bool(result and result.handwriting_supports_candidate))
+        instructor_value = result.values["instructor"] if result else None
+        resolution = resolutions["instructor"]
+        if (roster and result and result.handwriting_supports_candidate
+                and resolution.resolved_value is None and instructor.raw and instructor_value):
+            first_suggestion, first_ambiguous, _ = roster.suggest_name(instructor.raw)
+            stage3_suggestion, stage3_ambiguous, _ = roster.suggest_name(instructor_value)
+            if (first_suggestion and first_suggestion == stage3_suggestion
+                    and not first_ambiguous and not stage3_ambiguous):
+                resolutions["instructor"] = FieldResolution(
+                    "instructor", stage1, stage2, instructor_value, first_suggestion,
+                    first_suggestion, "independent fuzzy instructor readings resolved unique roster member",
+                    False, attempt)
 
     prefixes = sorted({name.rsplit(".", 1)[0] for name in first if name.startswith("attendee.")})
     signatures = [r.pixel_box(*page.size)[0] for r in template.regions if r.kind == "signature"]
