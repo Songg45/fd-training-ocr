@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Mapping, Sequence
 
@@ -68,15 +68,22 @@ def _attempt(result: ContextVerificationResult) -> dict[str, object]:
 def _verify(provider: RecognitionProvider, request: ContextVerificationRequest
             ) -> tuple[ContextVerificationResult | None, tuple[dict[str, object], ...]]:
     """A malformed Pass-2 response is evidence for review, never a batch failure."""
-    try:
-        result = provider.verify_context(request)
-        item = _attempt(result); item["stage"] = 3; item["prompt"] = request.prompt
-        return result, (item,)
-    except RecognitionError as exc:
-        return None, ({"attempt": request.attempt, "stage": 3, "prompt": request.prompt,
-                       "provider": provider.name,
-                       "model": provider.model, "source_region": list(request.source_region),
-                       "error": str(exc)},)
+    attempts: list[dict[str, object]] = []
+    current = request
+    for number in (1, 2):
+        try:
+            result = provider.verify_context(current)
+            item = _attempt(result); item["stage"] = 3; item["prompt"] = current.prompt
+            attempts.append(item)
+            return result, tuple(attempts)
+        except RecognitionError as exc:
+            attempts.append({"attempt": number, "stage": 3, "prompt": current.prompt,
+                             "provider": provider.name, "model": provider.model,
+                             "source_region": list(current.source_region), "error": str(exc)})
+            current = replace(request, attempt=2, prompt=request.prompt +
+                ' Schema repair: quote every value as a JSON string (including numbers), use null only for blank values, '
+                'and make "alternatives" an object mapping every requested value key to an array of strings.')
+    return None, tuple(attempts)
 
 
 def _deterministically_consistent(values: Mapping[str, str | None]) -> bool:
@@ -188,7 +195,7 @@ def verify_second_pass(page: Image.Image, template: TemplateDefinition,
                   '"total_hours":string[]}}.')
         result, attempt = _verify(provider, _request(page, "time_group", "time_group", regions,
                                                      prompt, padding=110))
-        calls += 1
+        calls += len(attempt)
         values = result.values if result else {name: None for name in time_names}
         group_deterministic = bool(result and result.internally_consistent and
                                    _deterministically_consistent(values))
@@ -210,7 +217,7 @@ def verify_second_pass(page: Image.Image, template: TemplateDefinition,
         result, attempt = _verify(provider, _request(page, "instructor", "instructor",
                                                      [template.region("instructor")], prompt,
                                                      padding=70))
-        calls += 1
+        calls += len(attempt)
         stage1, stage2 = _stage_pair(first["instructor"])
         resolutions["instructor"] = _resolve("instructor", stage1, stage2,
             result.values["instructor"] if result else None, instructor_candidate, attempt,
@@ -237,7 +244,7 @@ def verify_second_pass(page: Image.Image, template: TemplateDefinition,
                   '"alternatives":{"unit_id":string[],"print_name":string[]}}.')
         result, attempt = _verify(provider, _request(page, prefix, "attendee_row",
             [template.region(unit_name), template.region(print_name)], prompt, right_limit=signature_left))
-        calls += 1
+        calls += len(attempt)
         supports = bool(result and result.handwriting_supports_candidate)
         values = result.values if result else {"unit_id": None, "print_name": None}
         unit1, unit2 = _stage_pair(first[unit_name]); name1, name2 = _stage_pair(first[print_name])
@@ -258,7 +265,7 @@ def verify_second_pass(page: Image.Image, template: TemplateDefinition,
                   'Return exactly {"value":string|null,"alternatives":{"value":string[]}}.')
         result, attempt = _verify(provider, _request(page, name, "field",
                                                      [template.region(name)], prompt, padding=70))
-        calls += 1
+        calls += len(attempt)
         value = result.values["value"] if result else None
         resolutions[name] = _resolve(name, stage1, stage2, value, None, attempt)
     return SecondPassReport(resolutions, calls)
