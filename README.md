@@ -4,9 +4,9 @@ A local-first pipeline for extracting auditable, structured data from standardiz
 
 ## Current status
 
-Checkpoint 3 adds a versioned normalized field map, page alignment, explicit quality gates,
-and debug overlays. It does **not** detect selections or populated rows, perform OCR, or send
-data to external services.
+Checkpoint 4 adds localized option scoring, attendee-row occupancy based only on unit ID and
+print-name cells, and optional printed-rule suppression. It does **not** perform OCR,
+recognition, normalization, validation, export, or send data to external services.
 
 ## Requirements
 
@@ -70,6 +70,17 @@ fd-training-ocr align path\to\form.pdf `
 The command reports cardinal orientation, fine deskew, printed-form coverage, anchor
 coverage, and excess ink. It exits with status 1 when the configured form/anchor coverage
 or deskew limits fail. Outputs remain under ignored `output/` paths.
+
+Run deterministic detection after alignment:
+
+```powershell
+fd-training-ocr detect output\alignment\aligned.png `
+  --master output\template-preparation\cleaned-master.png `
+  --template templates\pilot_fd_training_sign_in\v1\template.json
+```
+
+The command writes per-region scores plus ignored option and row diagnostic overlays.
+Signature regions are never cropped, scored, detected, validated, exported, or processed.
 
 ## Offline tests
 

@@ -8,11 +8,15 @@ from pathlib import Path
 import sys
 from typing import Optional, Sequence
 
+from PIL import Image
+
 from .config import load_config
 from .alignment import AlignmentError, align_image, format_metrics
 from .pdf_render import PdfRenderError, render_pdf
 from .preprocessing import prepare_template
 from .template import TemplateError, load_template
+from .checkbox_detection import detect_options, draw_option_diagnostics
+from .table_extraction import detect_populated_rows, draw_row_diagnostics
 
 
 def _normalized_rectangle(value: str) -> tuple[float, float, float, float]:
@@ -46,6 +50,11 @@ def build_parser() -> argparse.ArgumentParser:
     align.add_argument("--output-dir", type=Path)
     align.add_argument("--pdftoppm", type=Path)
     align.add_argument("--dpi", type=int, default=300)
+    detect = subcommands.add_parser("detect", help="Run deterministic detection on an aligned page")
+    detect.add_argument("aligned", type=Path)
+    detect.add_argument("--master", type=Path, required=True)
+    detect.add_argument("--template", type=Path, required=True)
+    detect.add_argument("--output-dir", type=Path)
     return parser
 
 
@@ -94,6 +103,32 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(json.dumps({"aligned_page": str(result.aligned_path),
                           "regions_overlay": str(result.overlay_path),
                           "quality": format_metrics(result.metrics)}, indent=2))
+        return 0
+    if args.command == "detect":
+        destination = args.output_dir or config.output_dir / "detection"
+        try:
+            definition = load_template(args.template)
+            master = Image.open(args.master).convert("L")
+            completed = Image.open(args.aligned).convert("L")
+            options = detect_options(master, completed, definition)
+            rows = detect_populated_rows(master, completed, definition)
+            destination.mkdir(parents=True, exist_ok=True)
+            draw_option_diagnostics(completed, definition, options, destination / "options.png")
+            draw_row_diagnostics(completed, definition, rows, destination / "rows.png")
+        except (OSError, ValueError, TemplateError) as exc:
+            print(f"Detection failed: {exc}", file=sys.stderr)
+            return 1
+        payload = {
+            "selected_options": [score.name for score in options if score.selected],
+            "option_scores": {score.name: {"difference": round(score.difference_ratio, 5),
+                "added_ink": round(score.added_ink_ratio, 5)} for score in options},
+            "populated_rows": [score.row for score in rows if score.populated],
+            "row_scores": {str(score.row): {"unit_id": round(score.unit_id.added_ink_ratio, 5),
+                "print_name": round(score.print_name.added_ink_ratio, 5)} for score in rows},
+            "diagnostics": [str(destination / "options.png"), str(destination / "rows.png")],
+        }
+        (destination / "scores.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        print(json.dumps(payload, indent=2))
         return 0
     parser.error(f"Unknown command: {args.command}")
     return 2

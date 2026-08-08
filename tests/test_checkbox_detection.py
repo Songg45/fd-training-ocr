@@ -1,6 +1,56 @@
 import unittest
 
+from PIL import Image, ImageDraw
 
-@unittest.skip("Checkbox detection begins at Checkpoint 4")
+from fd_training_ocr.checkbox_detection import detect_options
+from fd_training_ocr.template import Region, TemplateDefinition
+
+
+def definition() -> TemplateDefinition:
+    return TemplateDefinition("synthetic", "v1", "normalized_xywh", (400, 200),
+                              frozenset({"signature"}), {}, (
+        Region("training_type.driver", "option", (0.10, 0.10, 0.30, 0.25), {}),
+        Region("facility.classroom", "option", (0.10, 0.40, 0.30, 0.25), {}),
+        Region("truck.brush54", "option", (0.55, 0.10, 0.30, 0.25), {}),
+    ))
+
+
+def pages(marked: set[str]) -> tuple[Image.Image, Image.Image]:
+    master = Image.new("L", (400, 200), 255)
+    draw = ImageDraw.Draw(master)
+    for region in definition().regions:
+        box = region.pixel_box(*master.size)
+        draw.line((box[0], box[3] - 5, box[2], box[3] - 5), fill=0, width=2)
+    completed = master.copy()
+    draw = ImageDraw.Draw(completed)
+    for region in definition().regions:
+        if region.name in marked:
+            box = region.pixel_box(*master.size)
+            draw.line((box[0] + 12, box[1] + 5, box[0] + 30, box[3] - 2), fill=0, width=5)
+            draw.line((box[0] + 30, box[3] - 2, box[2] - 8, box[1] + 2), fill=0, width=5)
+    return master, completed
+
+
 class CheckboxDetectionTests(unittest.TestCase):
-    pass
+    def test_detects_crossing_marks_without_blank_false_positives(self) -> None:
+        master, completed = pages({"training_type.driver", "truck.brush54"})
+        scores = detect_options(master, completed, definition())
+        selected = {score.name for score in scores if score.selected}
+        self.assertEqual(selected, {"training_type.driver", "truck.brush54"})
+
+    def test_synthetic_precision_and_recall_are_perfect(self) -> None:
+        tp = fp = fn = 0
+        cases = [set(), {"facility.classroom"}, {"training_type.driver", "truck.brush54"},
+                 {region.name for region in definition().regions}]
+        for expected in cases:
+            master, completed = pages(expected)
+            predicted = {score.name for score in detect_options(master, completed, definition()) if score.selected}
+            tp += len(expected & predicted)
+            fp += len(predicted - expected)
+            fn += len(expected - predicted)
+        self.assertEqual(tp / (tp + fp), 1.0)
+        self.assertEqual(tp / (tp + fn), 1.0)
+
+
+if __name__ == "__main__":
+    unittest.main()
