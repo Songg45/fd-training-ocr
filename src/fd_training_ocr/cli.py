@@ -17,6 +17,11 @@ from .preprocessing import prepare_template
 from .template import TemplateError, load_template
 from .checkbox_detection import detect_options, draw_option_diagnostics
 from .table_extraction import detect_populated_rows, draw_row_diagnostics
+from .export import run_batch
+from .pipeline import processor_factory
+from .recognition import MockRecognitionProvider, OllamaVisionProvider
+from .validation import ValidationPolicy
+from .evaluation import evaluate, write_report
 
 
 def _normalized_rectangle(value: str) -> tuple[float, float, float, float]:
@@ -34,8 +39,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", type=Path, help="Path to a local TOML configuration file")
     subcommands = parser.add_subparsers(dest="command", required=True)
     subcommands.add_parser("inspect-config", help="Print effective non-secret configuration")
-    process = subcommands.add_parser("process", help="Process one PDF or directory (future checkpoint)")
+    process = subcommands.add_parser("process", help="Process one PDF or a directory idempotently")
     process.add_argument("source", type=Path)
+    process.add_argument("--master", type=Path, required=True)
+    process.add_argument("--template", type=Path, required=True)
+    process.add_argument("--output-dir", type=Path)
+    process.add_argument("--pdftoppm", type=Path)
+    process.add_argument("--provider", choices=("mock", "ollama"), default="mock")
+    evaluation = subcommands.add_parser("evaluate", help="Report exact match separately by field type")
+    evaluation.add_argument("predictions", type=Path, help="JSON array of record_id, field_name, value objects")
+    evaluation.add_argument("truth", type=Path, help="JSON array of record_id, field_name, value objects")
+    evaluation.add_argument("--output", type=Path, required=True)
     prepare = subcommands.add_parser("prepare-template", help="Render and clean page 1 of a blank form")
     prepare.add_argument("source", type=Path)
     prepare.add_argument("--output-dir", type=Path)
@@ -70,11 +84,32 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(json.dumps(config.as_dict(), indent=2, sort_keys=True))
         return 0
     if args.command == "process":
-        print(
-            "End-to-end processing is not implemented through Checkpoint 3; the source was not read or modified.",
-            file=sys.stderr,
-        )
-        return 2
+        destination = args.output_dir or config.output_dir / "batch"
+        provider = (OllamaVisionProvider(config.ollama_model, config.ollama_endpoint, config.ollama_timeout_seconds)
+                    if args.provider == "ollama" else MockRecognitionProvider())
+        try:
+            processor = processor_factory(work_dir=destination / "work", master_path=args.master,
+                template_path=args.template, provider=provider, repository_root=Path.cwd(),
+                roster_path=config.roster_path, pdftoppm=args.pdftoppm,
+                policy=ValidationPolicy(apparatus=config.valid_apparatus, locations=config.valid_locations))
+            summary = run_batch(args.source, destination, processor)
+        except (OSError, ValueError, TemplateError) as exc:
+            print(json.dumps({"status":"failed", "error_type":type(exc).__name__, "message":str(exc)}), file=sys.stderr)
+            return 2
+        print(json.dumps({"discovered": summary.discovered, "succeeded": summary.succeeded,
+            "review_required": summary.review_required, "failed": summary.failed,
+            "skipped_duplicate": summary.skipped_duplicate, "exit_code": summary.exit_code}, indent=2))
+        return summary.exit_code
+    if args.command == "evaluate":
+        try:
+            predictions = json.loads(args.predictions.read_text(encoding="utf-8"))
+            truth = json.loads(args.truth.read_text(encoding="utf-8"))
+            if not isinstance(predictions, list) or not isinstance(truth, list): raise ValueError("evaluation inputs must be JSON arrays")
+            metrics = evaluate(predictions, truth); write_report(args.output, metrics)
+        except (OSError, ValueError, json.JSONDecodeError, KeyError) as exc:
+            print(json.dumps({"status":"failed", "error_type":type(exc).__name__, "message":str(exc)}), file=sys.stderr); return 2
+        print(json.dumps({"metrics_by_field_type":[{"field_type":x.field_type,"correct":x.correct,"total":x.total,"exact_match":x.exact_match} for x in metrics]}, indent=2))
+        return 0
     if args.command == "prepare-template":
         destination = args.output_dir or config.output_dir / "template-preparation"
         try:
