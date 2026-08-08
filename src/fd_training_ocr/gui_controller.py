@@ -344,8 +344,18 @@ def automatic_export_stem(record: Mapping[str, Any]) -> str:
 
 
 def automatic_export(record: Mapping[str, Any], directory: Path) -> Path:
-    """Export without overwriting a different form that has the same training date."""
+    """Export one current file per source hash without overwriting another form."""
     directory = directory.expanduser().resolve()
+    digest = record.get("source_sha256")
+    owned_paths = []
+    if digest and directory.is_dir():
+        for path in directory.glob("*.json"):
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if existing.get("source_sha256") == digest:
+                owned_paths.append(path.resolve())
     stem = automatic_export_stem(record)
     candidate = directory / f"{stem}.json"
     suffix = 2
@@ -354,12 +364,15 @@ def automatic_export(record: Mapping[str, Any], directory: Path) -> Path:
             existing = json.loads(candidate.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             existing = {}
-        if (record.get("source_sha256") and
-                existing.get("source_sha256") == record.get("source_sha256")):
+        if digest and existing.get("source_sha256") == digest:
             break
         candidate = directory / f"{stem}-{suffix}.json"
         suffix += 1
-    return export_record(record, candidate)
+    destination = export_record(record, candidate)
+    for obsolete in owned_paths:
+        if obsolete != destination:
+            obsolete.unlink(missing_ok=True)
+    return destination
 
 
 def save_gui_state(state_file: Path, sources: list[Path] | tuple[Path, ...],

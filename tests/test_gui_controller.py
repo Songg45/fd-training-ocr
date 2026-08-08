@@ -200,6 +200,20 @@ class GuiControllerTests(unittest.TestCase):
         record = {"source_file":"Scan 17 (copy).pdf", "fields":{"date":{"raw":"unknown"}}}
         self.assertEqual(automatic_export_stem(record), "undated-Scan-17-copy")
 
+    def test_date_correction_renames_automatic_export_without_leaving_undated_file(self):
+        record = {"source_file":"Scan 17.pdf", "source_sha256":"same-source",
+                  "fields":{"date":{"raw":"unknown", "reviewed_value":None}}}
+        with tempfile.TemporaryDirectory() as directory:
+            export_dir = Path(directory)
+            undated = automatic_export(record, export_dir)
+            self.assertEqual(undated.name, "undated-Scan-17.json")
+            record["fields"]["date"]["reviewed_value"] = "12/17/2025"
+            dated = automatic_export(record, export_dir)
+            self.assertEqual(dated.name, "2025-12-17.json")
+            self.assertTrue(dated.exists())
+            self.assertFalse(undated.exists())
+            self.assertEqual(list(export_dir.glob("*.json")), [dated])
+
     def test_gui_state_round_trip_restores_results_failures_and_position(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
