@@ -87,6 +87,16 @@ class TableExtractionTests(unittest.TestCase):
         scores = tuple(row(number, number in {16, 18}) for number in range(1, 20))
         self.assertEqual(contiguous_populated_rows(scores), ())
 
+    def test_strong_two_cell_first_row_is_recovered_when_second_row_is_populated(self) -> None:
+        def row(number: int, populated: bool, unit_difference: float,
+                name_difference: float) -> RowScore:
+            unit = CellScore(f"attendee.{number:02d}.unit_id", unit_difference, -.01)
+            name = CellScore(f"attendee.{number:02d}.print_name", name_difference, -.001)
+            return RowScore(number, unit, name, populated)
+        scores = (row(1, False, .12092, .11688), row(2, True, .13859, .15557),
+                  row(3, False, .07, .06))
+        self.assertEqual(contiguous_populated_rows(scores), (1, 2))
+
 
 if __name__ == "__main__":
     unittest.main()

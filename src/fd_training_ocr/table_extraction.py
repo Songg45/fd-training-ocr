@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -66,8 +66,19 @@ def detect_populated_rows(master: Image.Image, completed: Image.Image,
 
 def contiguous_populated_rows(scores: tuple[RowScore, ...]) -> tuple[int, ...]:
     """Accept only the top-down contiguous attendee block used by the form."""
+    ordered = tuple(sorted(scores, key=lambda item: item.row))
+    # A light first entry can lose net-ink contrast against a darker/noisier
+    # master even though localized handwriting remains evident in both cells.
+    # Recover it only when row 2 is independently populated and both row-1
+    # cells carry strong difference evidence; isolated lower-row noise remains
+    # suppressed by the normal contiguous rule.
+    if (len(ordered) >= 2 and ordered[0].row == 1 and not ordered[0].populated
+            and ordered[1].row == 2 and ordered[1].populated
+            and ordered[0].unit_id.difference_ratio >= .10
+            and ordered[0].print_name.difference_ratio >= .10):
+        ordered = (replace(ordered[0], populated=True), *ordered[1:])
     populated = []
-    for score in sorted(scores, key=lambda item: item.row):
+    for score in ordered:
         if score.row != len(populated) + 1 or not score.populated:
             break
         populated.append(score.row)
