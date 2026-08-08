@@ -29,6 +29,9 @@ def template():
         Region("attendee.01.unit_id", "attendee_cell", (.10, .40, .15, .08), {"row": 1}),
         Region("attendee.01.print_name", "attendee_cell", (.25, .40, .30, .08), {"row": 1}),
         Region("attendee.01.signature", "signature", (.55, .40, .35, .08), {"row": 1}),
+        Region("attendee.02.unit_id", "attendee_cell", (.10, .50, .15, .08), {"row": 2}),
+        Region("attendee.02.print_name", "attendee_cell", (.25, .50, .30, .08), {"row": 2}),
+        Region("attendee.02.signature", "signature", (.55, .50, .35, .08), {"row": 2}),
     )
     return TemplateDefinition("test", "v1", "normalized_xywh", (1000, 1000),
                               frozenset({"signature"}), {}, regions)
@@ -144,6 +147,33 @@ class SecondPassTests(unittest.TestCase):
                                       provider, first, report, roster)
         self.assertEqual(verified.resolutions["attendee.01.unit_id"].resolved_value, "4354")
         self.assertEqual(verified.resolutions["attendee.01.print_name"].resolved_value,
+                         "Nick Sledge")
+
+    def test_duplicate_stage3_row_is_restored_from_strong_stage2_pair(self):
+        roster = Roster((RosterMember("Samantha Gibson", ("7554",), ()),
+                         RosterMember("Nick Sledge", ("4354",), ())))
+        first = (
+            result("attendee.01.unit_id", "4", stage2="+554"),
+            result("attendee.01.print_name", "Judy Anderson", stage2="Jamantha Gibson"),
+            result("attendee.02.unit_id", "477", stage2="4259"),
+            result("attendee.02.print_name", "IVAN IVOSY", stage2="Nich Thely"),
+        )
+        report = validate(first, roster=roster)
+        provider = MockRecognitionProvider(context_responses={
+            "attendee.01": {"unit_id": "4354", "print_name": "Nich Sledge",
+                "handwriting_supports_candidate": True,
+                "alternatives": {"unit_id": [], "print_name": []}},
+            "attendee.02": {"unit_id": "4359", "print_name": "Nich Sledy",
+                "handwriting_supports_candidate": True,
+                "alternatives": {"unit_id": [], "print_name": []}},
+        })
+        verified = verify_second_pass(Image.new("L", (1000, 1000), 255), template(),
+                                      provider, first, report, roster)
+        self.assertEqual(verified.resolutions["attendee.01.unit_id"].resolved_value, "7554")
+        self.assertEqual(verified.resolutions["attendee.01.print_name"].resolved_value,
+                         "Samantha Gibson")
+        self.assertEqual(verified.resolutions["attendee.02.unit_id"].resolved_value, "4354")
+        self.assertEqual(verified.resolutions["attendee.02.print_name"].resolved_value,
                          "Nick Sledge")
 
     def test_two_fuzzy_instructor_readings_resolve_same_unique_roster_member(self):

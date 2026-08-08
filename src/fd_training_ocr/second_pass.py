@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime
+from difflib import SequenceMatcher
 import re
 from typing import Mapping, Sequence
 
@@ -140,6 +141,23 @@ def _month_day(value: str | None) -> tuple[int, int] | None:
 def _year(value: str | None) -> str | None:
     match = re.fullmatch(r"\s*(\d{2}|\d{4})\s*", value or "")
     return match.group(1) if match else None
+
+
+def _strong_stage2_roster_pair(name: str | None, unit: str | None,
+                               roster: Roster | None):
+    if not roster or not name or not unit:
+        return None
+    suggestion, ambiguous, _ = roster.suggest_name(name)
+    member = roster.member_for_name(suggestion)
+    if ambiguous or member is None or len(member.unit_ids) != 1:
+        return None
+    score = max(SequenceMatcher(None, name.strip().casefold(), candidate.casefold()).ratio()
+                for candidate in (member.name, *member.aliases))
+    observed = re.sub(r"[^A-Za-z0-9]", "", unit).casefold()
+    roster_unit = member.unit_ids[0]
+    if score < .85 or len(observed) < 3 or not roster_unit.casefold().endswith(observed):
+        return None
+    return member
 
 
 def _stage_pair(result: RecognitionResult) -> tuple[str | None, str | None]:
@@ -384,6 +402,38 @@ def verify_second_pass(page: Image.Image, template: TemplateDefinition,
             resolutions[print_name] = FieldResolution(
                 print_name, name1, name2, values["print_name"], matched_member.name,
                 matched_member.name, matched_reason, False, attempt)
+
+    # A contextual crop can drift into the next handwritten row. If that makes
+    # two rows resolve to the same person, restore a row only when its independent
+    # Stage-2 name is a strong unique roster match and its Stage-2 ID suffix agrees.
+    resolved_pairs: dict[tuple[str, str], list[str]] = {}
+    for prefix in prefixes:
+        unit_name, print_name = prefix + ".unit_id", prefix + ".print_name"
+        if unit_name in resolutions and print_name in resolutions:
+            pair = (resolutions[unit_name].resolved_value or "",
+                    resolutions[print_name].resolved_value or "")
+            if all(pair):
+                resolved_pairs.setdefault(pair, []).append(prefix)
+    for duplicate_prefixes in resolved_pairs.values():
+        if len(duplicate_prefixes) < 2:
+            continue
+        for prefix in duplicate_prefixes:
+            unit_name, print_name = prefix + ".unit_id", prefix + ".print_name"
+            unit1, unit2 = _stage_pair(first[unit_name]); name1, name2 = _stage_pair(first[print_name])
+            member = _strong_stage2_roster_pair(name2, unit2, roster)
+            current_name = resolutions[print_name].resolved_value
+            if member is None or member.name == current_name:
+                continue
+            reason = "duplicate Stage 3 row corrected by strong Stage 2 roster pair"
+            unit_resolution, name_resolution = resolutions[unit_name], resolutions[print_name]
+            resolutions[unit_name] = replace(
+                unit_resolution, roster_suggestion=member.unit_ids[0],
+                resolved_value=member.unit_ids[0], resolution_reason=reason,
+                review_required=False)
+            resolutions[print_name] = replace(
+                name_resolution, roster_suggestion=member.name,
+                resolved_value=member.name, resolution_reason=reason,
+                review_required=False)
 
     grouped = set(time_names) | {"instructor"} | {
         name for name in first if name.startswith("attendee.")}
