@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import Future, ThreadPoolExecutor
 import json
 from pathlib import Path
 import sys
@@ -61,33 +62,17 @@ def main(argv=None) -> int:
             factor = 1.2 if event.angleDelta().y() > 0 else 1 / 1.2
             self.scale(factor, factor)
 
-    class Worker(QtCore.QObject):
-        # Use a serialized payload across the thread boundary.  Passing a Python
-        # object through an AutoConnection allowed PySide to invoke the receiver
-        # in the worker thread on Windows, which caused QTextDocument/QTimer
-        # affinity failures when the result widgets were populated.
-        completed = QtCore.Signal(str)
-        failed = QtCore.Signal(str)
-
-        def __init__(self, source):
-            super().__init__()
-            self.source = source
-
-        @QtCore.Slot()
-        def run(self):
-            try:
-                record = process_pdf(self.source, build_processor(config, paths))
-                self.completed.emit(json.dumps(record, ensure_ascii=False))
-            except Exception as exc:
-                self.failed.emit(f"{type(exc).__name__}: {exc}")
-
     class Window(QtWidgets.QMainWindow):
         def __init__(self):
             super().__init__()
             self.source = None
             self.record = None
             self.preview_temp = tempfile.TemporaryDirectory(prefix="fd-training-ocr-gui-")
-            self.thread = None
+            self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="fd-ocr")
+            self.future: Future | None = None
+            self.poll_timer = QtCore.QTimer(self)
+            self.poll_timer.setInterval(100)
+            self.poll_timer.timeout.connect(self.poll_result)
             self.setWindowTitle("FD Training OCR")
             self.resize(1350, 850)
             central = QtWidgets.QWidget(); self.setCentralWidget(central)
@@ -134,16 +119,21 @@ def main(argv=None) -> int:
 
         def process(self):
             self.set_busy(True); self.status.setText("Processing locally: Stages 1–2 Qwen2.5-VL, Stage 3 Qwen3-VL…")
-            self.thread = QtCore.QThread(self); worker = Worker(self.source); worker.moveToThread(self.thread)
-            queued = QtCore.Qt.ConnectionType.QueuedConnection
-            self.thread.started.connect(worker.run, queued)
-            worker.completed.connect(self.finished, queued)
-            worker.failed.connect(self.failed, queued)
-            worker.completed.connect(self.thread.quit, queued)
-            worker.failed.connect(self.thread.quit, queued)
-            self.thread.finished.connect(worker.deleteLater)
-            self.thread.finished.connect(self.thread.deleteLater); self.thread.worker = worker
-            self.thread.start()
+            source = self.source
+            self.future = self.executor.submit(
+                lambda: process_pdf(source, build_processor(config, paths)))
+            self.poll_timer.start()
+
+        @QtCore.Slot()
+        def poll_result(self):
+            if self.future is None or not self.future.done():
+                return
+            self.poll_timer.stop()
+            future, self.future = self.future, None
+            try:
+                self.finished(future.result())
+            except Exception as exc:
+                self.failed(f"{type(exc).__name__}: {exc}")
 
         def set_busy(self, busy):
             self.load_button.setEnabled(not busy); self.process_button.setEnabled(not busy and self.source is not None)
@@ -151,9 +141,7 @@ def main(argv=None) -> int:
             self.progress.setRange(0, 0 if busy else 1)
             if not busy: self.progress.setValue(1)
 
-        @QtCore.Slot(str)
-        def finished(self, payload):
-            record = json.loads(payload)
+        def finished(self, record):
             self.record = record; self.raw.setPlainText(json.dumps(record, indent=2, ensure_ascii=False))
             rows = structured_rows(record); self.table.setRowCount(len(rows))
             for row, values in enumerate(rows):
@@ -178,8 +166,10 @@ def main(argv=None) -> int:
                 except OSError as exc: QtWidgets.QMessageBox.critical(self, "Export failed", str(exc))
 
         def closeEvent(self, event):
-            if self.thread is not None and self.thread.isRunning():
+            if self.future is not None and not self.future.done():
                 event.ignore(); QtWidgets.QMessageBox.information(self, "Processing", "Wait for local OCR to finish before closing."); return
+            self.poll_timer.stop()
+            self.executor.shutdown(wait=False, cancel_futures=True)
             self.preview_temp.cleanup(); super().closeEvent(event)
 
     app = QtWidgets.QApplication(sys.argv[:1])
