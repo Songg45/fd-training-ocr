@@ -5,7 +5,7 @@ import unittest
 
 from PIL import Image
 
-from fd_training_ocr.review import build_review_artifacts, save_corrections
+from fd_training_ocr.review import build_review_artifacts, mask_signature_column, save_corrections
 from fd_training_ocr.template import load_template
 from fd_training_ocr.validation import FieldAssessment, ValidationReport
 
@@ -34,6 +34,16 @@ class ReviewTests(unittest.TestCase):
             target = Path(temp); build_review_artifacts(image, template, report, target)
             displayed = Image.open(target / "aligned-page.png").convert("L")
             self.assertEqual(displayed.crop(signature.pixel_box(*displayed.size)).getextrema(), (255, 255))
+
+    def test_signature_column_mask_covers_strokes_outside_row_boxes(self):
+        template = load_template(ROOT / "templates/pilot_fd_training_sign_in/v1/template.json")
+        image = Image.new("L", template.master_size, "white")
+        signature = next(r for r in template.regions if r.kind == "signature")
+        left, top, right, bottom = signature.pixel_box(*image.size)
+        from PIL import ImageDraw
+        ImageDraw.Draw(image).line((left + 10, top - 20, image.width - 2, bottom + 20), fill="black", width=8)
+        masked = mask_signature_column(image, template)
+        self.assertEqual(masked.crop((left, top - 20, image.width, bottom + 20)).getextrema(), (255, 255))
 
     def test_corrections_are_separate_and_timestamped(self):
         with tempfile.TemporaryDirectory() as temp:

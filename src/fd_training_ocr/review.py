@@ -24,6 +24,28 @@ class Correction:
     reviewed_at: str
 
 
+def mask_signature_column(image: Image.Image, template: TemplateDefinition) -> Image.Image:
+    """Return a copy with the complete signature-table body irreversibly redacted.
+
+    Signatures routinely cross their printed cell boundaries, so masking each exact
+    row box is insufficient.  The redaction starts one row above the first mapped
+    signature cell and extends through the right page edge and one row below the
+    final cell.
+    """
+    page = image.copy()
+    signatures = [r for r in template.regions
+                  if r.kind == "signature" or r.name.endswith(".signature")]
+    if not signatures:
+        return page
+    boxes = [region.pixel_box(*page.size) for region in signatures]
+    row_height = max(bottom - top for _, top, _, bottom in boxes)
+    left = max(0, min(box[0] for box in boxes) - max(4, page.width // 500))
+    top = max(0, min(box[1] for box in boxes) - row_height)
+    bottom = min(page.height, max(box[3] for box in boxes) + row_height)
+    ImageDraw.Draw(page).rectangle((left, top, page.width, bottom), fill="white")
+    return page
+
+
 def save_corrections(path: Path, corrections: Mapping[str, tuple[str | None, str]]) -> None:
     allowed = {"approved", "corrected", "unresolved"}; records = []
     stamp = datetime.now(timezone.utc).isoformat()
@@ -38,11 +60,7 @@ def build_review_artifacts(aligned_page: Image.Image, template: TemplateDefiniti
                            report: ValidationReport, output_dir: Path) -> Path:
     """Write page/crops/HTML locally; signatures are excluded by construction."""
     output_dir.mkdir(parents=True, exist_ok=True); crops = output_dir / "field-crops"; crops.mkdir(exist_ok=True)
-    page = aligned_page.convert("RGB")
-    page_draw = ImageDraw.Draw(page)
-    for region in template.regions:
-        if region.kind == "signature" or region.name.endswith(".signature"):
-            page_draw.rectangle(region.pixel_box(*page.size), fill="white")
+    page = mask_signature_column(aligned_page.convert("RGB"), template)
     overlay = page.copy(); draw = ImageDraw.Draw(overlay)
     safe_regions = {r.name: r for r in template.regions if r.kind != "signature" and not r.name.endswith(".signature")}
     overlay.save(output_dir / "aligned-page.png")

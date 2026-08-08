@@ -13,6 +13,7 @@ from .checkbox_detection import detect_options
 from .export import FormRecord
 from .pdf_render import render_pdf
 from .recognition import RecognitionProvider, recognize_fields
+from .review import mask_signature_column
 from .table_extraction import detect_populated_rows
 from .template import load_template
 from .validation import RosterError, ValidationPolicy, load_roster, validate
@@ -49,9 +50,7 @@ def processor_factory(*, work_dir: Path, master_path: Path, template_path: Path,
         page = Image.open(aligned.aligned_path).convert("L")
         # Derived whole-page artifacts are retained only after signature boxes are masked.
         # The source PDF remains unchanged and is the sole authoritative original.
-        for region in definition.regions:
-            if region.kind == "signature" or region.name.endswith(".signature"):
-                page.paste(255, region.pixel_box(*page.size))
+        page = mask_signature_column(page, definition)
         page.save(aligned.aligned_path)
         safe_regions = tuple(r for r in definition.regions if r.kind != "signature" and not r.name.endswith(".signature"))
         draw_region_overlay(page, safe_regions, aligned.overlay_path)
