@@ -353,9 +353,13 @@ def verify_second_pass(page: Image.Image, template: TemplateDefinition,
         name_member = roster.member_for_name(name_value) if roster and name_value else None
         exact_name_members = ({member for value in (name1, name2, name_value)
                                if roster and (member := roster.member_for_name(value)) is not None})
+        stage2_pair_member = _strong_stage2_roster_pair(name2, unit2, roster)
         matched_member = None
         matched_reason = None
-        if unit_member and (name_member is None or name_member == unit_member):
+        if stage2_pair_member is not None:
+            matched_member = stage2_pair_member
+            matched_reason = "strong Stage 2 name and unit suffix resolved unique roster member"
+        elif unit_member and (name_member is None or name_member == unit_member):
             matched_member = unit_member
             matched_reason = "exact Stage 3 roster unit ID resolved attendee pair"
         elif name_member and unit_member is None and len(name_member.unit_ids) == 1:

@@ -172,6 +172,7 @@ class SecondPassTests(unittest.TestCase):
         self.assertEqual(verified.resolutions["attendee.01.unit_id"].resolved_value, "7554")
         self.assertEqual(verified.resolutions["attendee.01.print_name"].resolved_value,
                          "Samantha Gibson")
+        self.assertIn("Stage 2", verified.resolutions["attendee.01.print_name"].resolution_reason)
         self.assertEqual(verified.resolutions["attendee.02.unit_id"].resolved_value, "4354")
         self.assertEqual(verified.resolutions["attendee.02.print_name"].resolved_value,
                          "Nick Sledge")
