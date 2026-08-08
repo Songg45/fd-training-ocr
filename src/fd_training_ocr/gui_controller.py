@@ -182,6 +182,37 @@ def apply_gui_edit(record: MutableMapping[str, Any], field_name: str, value: str
     review["reviewed_at"] = stamp
 
 
+def stage3_suggestion(record: Mapping[str, Any], field_name: str) -> Any:
+    field = record.get("fields", {}).get(field_name)
+    if (not isinstance(field, Mapping) or not field.get("second_pass_review_required")
+            or field.get("stage_3") is None):
+        return None
+    return field.get("stage_3")
+
+
+def accept_stage3_suggestion(record: MutableMapping[str, Any], field_name: str,
+                             reviewed_at: str | None = None) -> None:
+    """Accept an unresolved Stage-3 value as an explicit human correction."""
+    suggestion = stage3_suggestion(record, field_name)
+    if suggestion is None:
+        raise ValueError(f"field {field_name} has no unresolved Stage 3 suggestion")
+    fields = record.get("fields")
+    if not isinstance(fields, MutableMapping) or not isinstance(fields.get(field_name), MutableMapping):
+        raise ValueError(f"unknown reviewed field: {field_name}")
+    stamp = reviewed_at or datetime.now(timezone.utc).isoformat()
+    field = fields[field_name]
+    field["reviewed_value"] = suggestion
+    field["second_pass_review_required"] = False
+    field["resolution_reason"] = "Stage 3 suggestion accepted by reviewer"
+    field["review"] = {"status": "corrected", "reviewed_at": stamp,
+                       "source": "stage_3"}
+    review = record.setdefault("review", {})
+    review.setdefault("accepted_stage3", []).append(
+        {"field_name": field_name, "value": suggestion, "reviewed_at": stamp})
+    review["corrections_applied"] = True
+    review["reviewed_at"] = stamp
+
+
 def attendee_row_from_field(field_name: str) -> int | None:
     match = re.fullmatch(r"attendee\.(\d+)\.(?:unit_id|print_name)", field_name)
     return int(match.group(1)) if match else None

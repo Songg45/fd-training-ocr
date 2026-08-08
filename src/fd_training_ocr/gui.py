@@ -10,13 +10,14 @@ import sys
 import tempfile
 
 from .config import load_config
-from .gui_controller import (EVENT_SELECTIONS, GuiPaths, apply_event_selection, apply_gui_edit,
+from .gui_controller import (EVENT_SELECTIONS, GuiPaths, accept_stage3_suggestion,
+                             apply_event_selection, apply_gui_edit,
                              automatic_export, build_processor, effective_event_selection,
                              export_record, load_gui_state, process_pdf, save_gui_state,
                              discover_pdfs, index_after_removal, structured_rows,
                              attendee_row_from_field, remove_attendee, roster_table_rows,
                              add_attendee, first_available_attendee_row, save_roster_table,
-                             unprocessed_sources,
+                             stage3_suggestion, unprocessed_sources,
                              validate_pdfs)
 from .pdf_render import render_pdf
 
@@ -111,6 +112,7 @@ def main(argv=None) -> int:
             self.stop_button = QtWidgets.QPushButton("Stop After Current")
             self.delete_attendee_button = QtWidgets.QPushButton("Delete Attendee")
             self.add_attendee_button = QtWidgets.QPushButton("Add Attendee")
+            self.accept_stage3_button = QtWidgets.QPushButton("Accept Stage 3")
             self.export_button = QtWidgets.QPushButton("Export Results")
             self.remove_button.setEnabled(False)
             self.previous_button.setEnabled(False); self.next_button.setEnabled(False)
@@ -118,6 +120,7 @@ def main(argv=None) -> int:
             self.stop_button.setEnabled(False); self.export_button.setEnabled(False)
             self.delete_attendee_button.setEnabled(False)
             self.add_attendee_button.setEnabled(False)
+            self.accept_stage3_button.setEnabled(False)
             self.progress = QtWidgets.QProgressBar(); self.progress.setRange(0, 1); self.progress.setValue(0)
             self.status = QtWidgets.QLabel("Load a PDF to begin")
             for widget in (self.load_button, self.folder_button, self.roster_button,
@@ -125,7 +128,8 @@ def main(argv=None) -> int:
                            self.previous_button, self.page_label,
                            self.next_button, self.process_button, self.process_all_button,
                            self.stop_button, self.add_attendee_button,
-                           self.delete_attendee_button, self.export_button,
+                           self.delete_attendee_button, self.accept_stage3_button,
+                           self.export_button,
                            self.progress, self.status): controls.addWidget(widget)
             self.warning = QtWidgets.QLabel("")
             self.warning.setStyleSheet("background:#8b1e1e;color:white;font-weight:bold;padding:8px;")
@@ -140,7 +144,7 @@ def main(argv=None) -> int:
                                        QtWidgets.QAbstractItemView.EditTrigger.EditKeyPressed)
             self.table.itemChanged.connect(self.result_edited)
             self.table.cellDoubleClicked.connect(self.summary_activated)
-            self.table.currentCellChanged.connect(lambda *_: self.update_attendee_button())
+            self.table.currentCellChanged.connect(lambda *_: self.update_selection_buttons())
             tabs.addTab(self.table, "Structured Results")
             self.raw = QtWidgets.QPlainTextEdit(); self.raw.setReadOnly(True)
             tabs.addTab(self.raw, "Raw JSON")
@@ -155,6 +159,7 @@ def main(argv=None) -> int:
             self.stop_button.clicked.connect(self.request_stop)
             self.delete_attendee_button.clicked.connect(self.delete_selected_attendee)
             self.add_attendee_button.clicked.connect(self.add_attendee_dialog)
+            self.accept_stage3_button.clicked.connect(self.accept_selected_stage3)
             self.export_button.clicked.connect(self.export)
             self.restore_state()
 
@@ -389,7 +394,7 @@ def main(argv=None) -> int:
                 self.busy and self.batch_total > 0 and not self.stop_requested)
             self.export_button.setEnabled(not self.busy and self.record is not None)
             self.add_attendee_button.setEnabled(not self.busy and self.record is not None)
-            self.update_attendee_button()
+            self.update_selection_buttons()
 
         def add_attendee_dialog(self):
             if self.record is None:
@@ -451,6 +456,33 @@ def main(argv=None) -> int:
             self.delete_attendee_button.setEnabled(
                 not self.busy and self.record is not None
                 and self.selected_attendee_row() is not None)
+
+        def selected_field_name(self):
+            row = self.table.currentRow()
+            item = self.table.item(row, 0) if row >= 0 else None
+            return item.text() if item is not None else None
+
+        def update_selection_buttons(self):
+            self.update_attendee_button()
+            field_name = self.selected_field_name()
+            suggestion = (stage3_suggestion(self.record, field_name)
+                          if self.record is not None and field_name else None)
+            self.accept_stage3_button.setEnabled(not self.busy and suggestion is not None)
+
+        def accept_selected_stage3(self):
+            field_name = self.selected_field_name()
+            if self.record is None or not field_name:
+                return
+            try:
+                accept_stage3_suggestion(self.record, field_name)
+                automatic_export(self.record, args.export_dir)
+                self.persist_state()
+                self.display_record(self.record)
+                self.status.setText(
+                    f"Accepted Stage 3 suggestion for {field_name}; automatic export updated")
+            except (OSError, ValueError) as exc:
+                QtWidgets.QMessageBox.critical(
+                    self, "Unable to accept Stage 3 suggestion", str(exc))
 
         def delete_selected_attendee(self):
             attendee_row = self.selected_attendee_row()
@@ -575,7 +607,7 @@ def main(argv=None) -> int:
             needs_review = record.get("status") == "review_required"
             self.warning.setText("REVIEW REQUIRED — " + ("; ".join(record.get("warnings", ())) or "one or more fields require review"))
             self.warning.setVisible(needs_review); self.status.setText("Complete — review required" if needs_review else "Complete")
-            self.update_attendee_button()
+            self.update_selection_buttons()
 
         def result_edited(self, item):
             if self.record is None or item.column() != 1:

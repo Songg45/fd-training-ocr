@@ -4,7 +4,8 @@ import tempfile
 import unittest
 
 from fd_training_ocr.config import AppConfig
-from fd_training_ocr.gui_controller import (GuiPaths, add_attendee, apply_event_selection,
+from fd_training_ocr.gui_controller import (GuiPaths, accept_stage3_suggestion, add_attendee,
+                                             apply_event_selection,
                                              apply_facilities_edit, apply_gui_edit,
                                              automatic_export, automatic_export_stem,
                                              build_processor, display_value, effective_event_selection,
@@ -13,6 +14,7 @@ from fd_training_ocr.gui_controller import (GuiPaths, add_attendee, apply_event_
                                              load_gui_state, save_gui_state, unprocessed_sources,
                                              attendee_row_from_field, remove_attendee,
                                              first_available_attendee_row,
+                                             stage3_suggestion,
                                              roster_table_rows, save_roster_table,
                                              validate_pdf, validate_pdfs)
 
@@ -134,6 +136,23 @@ class GuiControllerTests(unittest.TestCase):
             "second_pass_review_required":True}}, "event":{}})
         self.assertEqual(rows[0], ("description", "system",
             "recognizer supplied alternatives; Stage 3 suggests: Fire/Res Safety", True))
+
+    def test_stage3_suggestion_acceptance_preserves_evidence_and_resolves_field(self):
+        record = {"fields":{"description":{"raw":"system", "normalized":"system",
+            "reviewed_value":None, "stage_3":"Fire/Res Safety",
+            "second_pass_review_required":True, "warnings":["check description"]}},
+            "review":{"corrections_applied":False, "reviewed_at":None}}
+        self.assertEqual(stage3_suggestion(record, "description"), "Fire/Res Safety")
+        accept_stage3_suggestion(record, "description", "2026-08-08T12:00:00Z")
+        field = record["fields"]["description"]
+        self.assertEqual(field["raw"], "system")
+        self.assertEqual(field["stage_3"], "Fire/Res Safety")
+        self.assertEqual(field["reviewed_value"], "Fire/Res Safety")
+        self.assertFalse(field["second_pass_review_required"])
+        self.assertEqual(field["review"]["source"], "stage_3")
+        self.assertIsNone(stage3_suggestion(record, "description"))
+        self.assertEqual(record["review"]["accepted_stage3"][0]["field_name"],
+                         "description")
 
     def test_facilities_edit_preserves_machine_result(self):
         record = {"event":{"facilities":[]},
