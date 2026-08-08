@@ -2,7 +2,7 @@
 
 ## Objective
 
-Build a reliable, auditable pipeline that extracts structured data from standardized fire department training sign-in sheets. The system must handle scanned PDFs containing handwriting, checkmarks, table entries, and signatures without treating the page as an unstructured block of text.
+Build a reliable, auditable pipeline that extracts structured data from standardized fire department training sign-in sheets. The system must handle scanned PDFs containing handwriting, checkmarks, and table entries without treating the page as an unstructured block of text.
 
 The initial form is the "Pilot Fire Department Training Sign-in Sheet." The architecture should support additional form revisions through versioned templates rather than form-specific rewrites.
 
@@ -15,7 +15,7 @@ The initial form is the "Pilot Fire Department Training Sign-in Sheet." The arch
 - Use handwriting-capable vision recognition only for populated text regions.
 - Store confidence, alternatives, and source coordinates with every extracted value.
 - Route uncertain or contradictory results to human review.
-- Preserve signatures as image evidence; do not identify or transcribe signers from signatures.
+- Exclude signature regions from cropping, recognition, scoring, validation, and export.
 - Never silently correct conflicting values.
 
 ## Initial Output Schema
@@ -38,8 +38,7 @@ The initial form is the "Pilot Fire Department Training Sign-in Sheet." The arch
   "attendees": [
     {
       "unit_id": null,
-      "print_name": null,
-      "signature_crop": null
+      "print_name": null
     }
   ],
   "trucks_used": [],
@@ -144,7 +143,7 @@ Do not commit source forms, completed forms, extracted signatures, personally id
 4. Preserve raw recognition output before normalization.
 5. Require structured responses and reject malformed results.
 6. Support a local/mock recognizer so tests do not require network access.
-7. Treat signatures only as evidence crops linked to their attendee rows.
+7. Exclude every region marked as `signature`; never send it to a recognition provider.
 
 ### Phase 3 Acceptance Criteria
 

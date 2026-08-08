@@ -9,8 +9,10 @@ import sys
 from typing import Optional, Sequence
 
 from .config import load_config
+from .alignment import AlignmentError, align_image, format_metrics
 from .pdf_render import PdfRenderError, render_pdf
 from .preprocessing import prepare_template
+from .template import TemplateError, load_template
 
 
 def _normalized_rectangle(value: str) -> tuple[float, float, float, float]:
@@ -37,6 +39,13 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--dpi", type=int, default=300)
     prepare.add_argument("--stray-mark", type=_normalized_rectangle, action="append", default=[],
                          help="Normalized x,y,width,height region containing a pen mark")
+    align = subcommands.add_parser("align", help="Align page 1 and draw the versioned field map")
+    align.add_argument("source", type=Path)
+    align.add_argument("--master", type=Path, required=True)
+    align.add_argument("--template", type=Path, required=True)
+    align.add_argument("--output-dir", type=Path)
+    align.add_argument("--pdftoppm", type=Path)
+    align.add_argument("--dpi", type=int, default=300)
     return parser
 
 
@@ -53,7 +62,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
     if args.command == "process":
         print(
-            "PDF processing is not implemented in Checkpoint 1; the source was not read or modified.",
+            "End-to-end processing is not implemented through Checkpoint 3; the source was not read or modified.",
             file=sys.stderr,
         )
         return 2
@@ -71,6 +80,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                           "diagnostics": str(result.diagnostics_path),
                           "deskew_angle_degrees": round(result.angle_degrees, 3),
                           "crop_box": result.crop_box}, indent=2))
+        return 0
+    if args.command == "align":
+        destination = args.output_dir or config.output_dir / "alignment"
+        try:
+            definition = load_template(args.template)
+            rendered = render_pdf(args.source, destination / "rendered", dpi=args.dpi,
+                                  pdftoppm=args.pdftoppm)
+            result = align_image(rendered[0].path, args.master, destination, definition)
+        except (OSError, ValueError, PdfRenderError, TemplateError, AlignmentError) as exc:
+            print(f"Alignment failed: {exc}", file=sys.stderr)
+            return 1
+        print(json.dumps({"aligned_page": str(result.aligned_path),
+                          "regions_overlay": str(result.overlay_path),
+                          "quality": format_metrics(result.metrics)}, indent=2))
         return 0
     parser.error(f"Unknown command: {args.command}")
     return 2

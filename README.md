@@ -4,7 +4,9 @@ A local-first pipeline for extracting auditable, structured data from standardiz
 
 ## Current status
 
-Checkpoint 2 adds local first-page PDF rendering and deterministic blank-template preparation. It does **not** align completed forms, define fields, perform OCR, or send data to external services.
+Checkpoint 3 adds a versioned normalized field map, page alignment, explicit quality gates,
+and debug overlays. It does **not** detect selections or populated rows, perform OCR, or send
+data to external services.
 
 ## Requirements
 
@@ -55,6 +57,19 @@ both `cleaned-master.png` and `preparation-diagnostics.png`. The input PDF is ne
 For a known stray pen stroke, repeat `--stray-mark x,y,width,height` with normalized
 page coordinates. Only short strokes inside that local region are cleared; long table
 rules are retained. These form-specific values stay in local invocation/configuration.
+
+Align a completed or blank form to the local cleaned master and render a region overlay:
+
+```powershell
+fd-training-ocr align path\to\form.pdf `
+  --master output\template-preparation\cleaned-master.png `
+  --template templates\pilot_fd_training_sign_in\v1\template.json `
+  --pdftoppm path\to\pdftoppm.exe
+```
+
+The command reports cardinal orientation, fine deskew, printed-form coverage, anchor
+coverage, and excess ink. It exits with status 1 when the configured form/anchor coverage
+or deskew limits fail. Outputs remain under ignored `output/` paths.
 
 ## Offline tests
 
