@@ -96,8 +96,9 @@ editable structured field results plus the complete JSON record on the right. Tr
 type, truck, facilities, calculated duration, and Stage-3 resolution status appear as
 read-only summary rows. OCR runs in a background executor while all Qt work remains on
 the main thread, and a prominent banner identifies records requiring human review. Edits
-are stored as separate reviewed values without replacing machine evidence. Export Results
-saves the currently displayed, signature-free JSON record to a chosen location.
+are stored as separate reviewed values without replacing machine evidence. Results are
+automatically written to the configured export folder after processing, after edits, when
+moving with Previous/Next, and when closing the GUI; no separate export action is required.
 
 Launch it with the same local master, template, configuration, and Poppler executable used
 by the CLI:

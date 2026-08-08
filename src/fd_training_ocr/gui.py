@@ -16,7 +16,7 @@ from .gui_controller import (EVENT_SELECTIONS, GuiPaths, accept_stage3_suggestio
                              populate_name_from_roster_unit,
                              populate_unit_from_roster_name,
                              automatic_export, build_processor, effective_event_selection,
-                             export_record, load_gui_state, process_pdf, save_gui_state,
+                             load_gui_state, process_pdf, save_gui_state,
                              discover_pdfs, index_after_removal, structured_rows,
                              attendee_row_from_field, remove_attendee, roster_table_rows,
                              add_attendee, first_available_attendee_row, save_roster_table,
@@ -117,7 +117,6 @@ def main(argv=None) -> int:
             self.delete_attendee_button = QtGui.QAction("Delete Attendee", self)
             self.add_attendee_button = QtGui.QAction("Add Attendee", self)
             self.accept_stage3_button = QtWidgets.QPushButton("Accept Stage 3")
-            self.export_button = QtWidgets.QPushButton("Export Results")
 
             def menu_tool(text, actions):
                 tool = QtWidgets.QToolButton()
@@ -141,7 +140,7 @@ def main(argv=None) -> int:
             self.remove_all_button.setEnabled(False)
             self.previous_button.setEnabled(False); self.next_button.setEnabled(False)
             self.process_button.setEnabled(False); self.process_all_button.setEnabled(False)
-            self.stop_button.setEnabled(False); self.export_button.setEnabled(False)
+            self.stop_button.setEnabled(False)
             self.delete_attendee_button.setEnabled(False)
             self.add_attendee_button.setEnabled(False)
             self.accept_stage3_button.setEnabled(False)
@@ -152,7 +151,6 @@ def main(argv=None) -> int:
                            self.previous_button, self.page_label, self.next_button,
                            self.stop_button,
                            self.accept_stage3_button,
-                           self.export_button,
                            self.progress, self.status): controls.addWidget(widget)
             self.warning = QtWidgets.QLabel("")
             self.warning.setStyleSheet("background:#8b1e1e;color:white;font-weight:bold;padding:8px;")
@@ -184,7 +182,6 @@ def main(argv=None) -> int:
             self.delete_attendee_button.triggered.connect(self.delete_selected_attendee)
             self.add_attendee_button.triggered.connect(self.add_attendee_dialog)
             self.accept_stage3_button.clicked.connect(self.accept_selected_stage3)
-            self.export_button.clicked.connect(self.export)
             self.restore_state()
 
         def restore_state(self):
@@ -350,12 +347,15 @@ def main(argv=None) -> int:
         def navigate(self, offset):
             target = self.current_index + offset
             if 0 <= target < len(self.sources):
-                self.current_index = target
                 try:
+                    if self.record is not None:
+                        automatic_export(self.record, args.export_dir)
+                    self.current_index = target
                     self.show_current()
                     self.persist_state()
                 except Exception as exc:
-                    QtWidgets.QMessageBox.critical(self, "Unable to load PDF", str(exc))
+                    QtWidgets.QMessageBox.critical(
+                        self, "Unable to save or load PDF", str(exc))
 
         def remove_current_pdf(self):
             if self.busy or not (0 <= self.current_index < len(self.sources)):
@@ -441,7 +441,6 @@ def main(argv=None) -> int:
                 not self.busy and bool(unprocessed_sources(self.sources, self.records)))
             self.stop_button.setEnabled(
                 self.busy and self.batch_total > 0 and not self.stop_requested)
-            self.export_button.setEnabled(not self.busy and self.record is not None)
             self.add_attendee_button.setEnabled(not self.busy and self.record is not None)
             self.update_selection_buttons()
             self.update_menu_buttons()
@@ -725,7 +724,6 @@ def main(argv=None) -> int:
                 suffix = f"; {roster_message}" if roster_message is not None else ""
                 self.status.setText(
                     f"Edited {field_name}{suffix}; automatic export updated")
-                self.export_button.setEnabled(True)
             except (OSError, ValueError) as exc:
                 QtWidgets.QMessageBox.critical(self, "Unable to save correction", str(exc))
 
@@ -762,7 +760,6 @@ def main(argv=None) -> int:
                 self.persist_state()
                 self.display_record(self.record)
                 self.status.setText(f"Edited {selection_name}; automatic export updated")
-                self.export_button.setEnabled(True)
             except (OSError, ValueError) as exc:
                 QtWidgets.QMessageBox.critical(self, "Unable to save correction", str(exc))
 
@@ -815,18 +812,16 @@ def main(argv=None) -> int:
                 f"{outcome}: {completed} of {total} attempted; {failures} failed")
             self.persist_state()
 
-        def export(self):
-            if self.record is None: return
-            suggested = str(paths.output_dir / f"{self.record['source_sha256']}.json")
-            name, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Export results", suggested, "JSON files (*.json)")
-            if name:
-                try:
-                    export_record(self.record, Path(name)); self.status.setText(f"Exported {Path(name).name}")
-                except OSError as exc: QtWidgets.QMessageBox.critical(self, "Export failed", str(exc))
-
         def closeEvent(self, event):
             if self.future is not None and not self.future.done():
                 event.ignore(); QtWidgets.QMessageBox.information(self, "Processing", "Wait for local OCR to finish before closing."); return
+            if self.record is not None:
+                try:
+                    automatic_export(self.record, args.export_dir)
+                except OSError as exc:
+                    event.ignore()
+                    QtWidgets.QMessageBox.critical(self, "Unable to save current record", str(exc))
+                    return
             self.poll_timer.stop()
             self.persist_state()
             self.executor.shutdown(wait=False, cancel_futures=True)
