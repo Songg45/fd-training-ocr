@@ -110,7 +110,7 @@ def main(argv=None) -> int:
             self.page_label = QtWidgets.QLabel("0 of 0")
             self.process_button = QtGui.QAction("Process Selected", self)
             self.process_all_button = QtGui.QAction("Process All", self)
-            self.stop_button = QtGui.QAction("Stop After Current", self)
+            self.stop_button = QtWidgets.QPushButton("Stop After Current")
             self.delete_attendee_button = QtGui.QAction("Delete Attendee", self)
             self.add_attendee_button = QtGui.QAction("Add Attendee", self)
             self.accept_stage3_button = QtWidgets.QPushButton("Accept Stage 3")
@@ -131,7 +131,7 @@ def main(argv=None) -> int:
             self.remove_menu_button = menu_tool(
                 "Remove", (self.remove_button, self.remove_all_button))
             self.process_menu_button = menu_tool(
-                "Process", (self.process_button, self.process_all_button, self.stop_button))
+                "Process", (self.process_button, self.process_all_button))
             self.attendees_menu_button = menu_tool(
                 "Attendees", (self.add_attendee_button, self.delete_attendee_button))
             self.remove_button.setEnabled(False)
@@ -147,6 +147,7 @@ def main(argv=None) -> int:
             for widget in (self.add_menu_button, self.remove_menu_button,
                            self.process_menu_button, self.attendees_menu_button,
                            self.previous_button, self.page_label, self.next_button,
+                           self.stop_button,
                            self.accept_stage3_button,
                            self.export_button,
                            self.progress, self.status): controls.addWidget(widget)
@@ -176,7 +177,7 @@ def main(argv=None) -> int:
             self.next_button.clicked.connect(lambda: self.navigate(1))
             self.process_button.triggered.connect(self.process)
             self.process_all_button.triggered.connect(self.process_all)
-            self.stop_button.triggered.connect(self.request_stop)
+            self.stop_button.clicked.connect(self.request_stop)
             self.delete_attendee_button.triggered.connect(self.delete_selected_attendee)
             self.add_attendee_button.triggered.connect(self.add_attendee_dialog)
             self.accept_stage3_button.clicked.connect(self.accept_selected_stage3)
@@ -449,7 +450,7 @@ def main(argv=None) -> int:
                 (self.remove_menu_button,
                  (self.remove_button, self.remove_all_button)),
                 (self.process_menu_button,
-                 (self.process_button, self.process_all_button, self.stop_button)),
+                 (self.process_button, self.process_all_button)),
                 (self.attendees_menu_button,
                  (self.add_attendee_button, self.delete_attendee_button)),
             )
