@@ -71,7 +71,7 @@ def detect_options(master: Image.Image, completed: Image.Image,
         best = ranked[0]
         runner_up = ranked[1].added_ink_ratio if len(ranked) > 1 else float("-inf")
         if (best.difference_ratio >= .060 and best.added_ink_ratio >= .002
-                and best.added_ink_ratio - runner_up >= .003):
+                and best.added_ink_ratio - runner_up >= .0025):
             scores = tuple(replace(score, selected=True) if score.name == best.name else score
                            for score in scores)
     # Facility marks are independent and more than one may be checked. Once one

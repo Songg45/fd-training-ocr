@@ -28,6 +28,7 @@ class AppConfig:
         ("F0", "Pilot FD"),
         ("PRO", "Pilot FD"),
         ("Pilot", "Pilot FD"),
+        ("Pilot D", "Pilot FD"),
         ("Pilot Fire", "Pilot FD"),
         ("Pilot Fire Dep", "Pilot FD"),
         ("Pilot Fire Dept", "Pilot FD"),
@@ -78,7 +79,7 @@ def _build_config(values: Mapping[str, Any]) -> AppConfig:
         raise ValueError("app.roster_path must be an absolute path")
     apparatus = values.get("valid_apparatus", list(AppConfig.valid_apparatus))
     locations = values.get("valid_locations", list(AppConfig.valid_locations))
-    pilot_spellings = {"pilot", "pilot fire", "pilot fire dep", "pilot fire dept",
+    pilot_spellings = {"pilot", "pilot d", "pilot fire", "pilot fire dep", "pilot fire dept",
                        "pilot fire department", "pfd", "pf0", "f0", "pro", "pilot fd"}
     locations = ["Pilot FD" if item.strip().casefold() in pilot_spellings else item
                  for item in locations] if isinstance(locations, list) else locations

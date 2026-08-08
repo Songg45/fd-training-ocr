@@ -10,6 +10,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(load_config(), AppConfig())
         self.assertTrue(load_config().offline)
         self.assertEqual(dict(load_config().location_aliases)["PRO"], "Pilot FD")
+        self.assertEqual(dict(load_config().location_aliases)["Pilot D"], "Pilot FD")
 
     def test_loads_toml(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

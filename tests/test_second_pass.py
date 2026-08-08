@@ -243,6 +243,19 @@ class SecondPassTests(unittest.TestCase):
         self.assertFalse(instructor.review_required)
         self.assertIn("fuzzy instructor readings", instructor.resolution_reason)
 
+    def test_stage2_and_stage3_fuzzy_instructor_readings_override_bad_stage1(self):
+        roster = Roster((RosterMember("Samantha Gibson", ("7554",)),))
+        first = (result("instructor", "Manuela Gil", stage2="Samantha Gib"),)
+        initial = validate(first, roster=roster)
+        provider = MockRecognitionProvider(context_responses={"instructor": {
+            "instructor": "Samantha Gibson", "handwriting_supports_candidate": True,
+            "alternatives": {"instructor": []}}})
+        verified = verify_second_pass(Image.new("L", (1000, 1000), 255), template(),
+                                      provider, first, initial, roster)
+        instructor = verified.resolutions["instructor"]
+        self.assertEqual(instructor.resolved_value, "Samantha Gibson")
+        self.assertFalse(instructor.review_required)
+
     def test_only_disagreeing_generic_field_triggers_stage3(self):
         first = (result("date", "12/17/25", stage2="12/11/25"),
                  result("description", "Synthetic drill"))

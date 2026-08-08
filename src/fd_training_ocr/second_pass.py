@@ -319,13 +319,20 @@ def verify_second_pass(page: Image.Image, template: TemplateDefinition,
         resolution = resolutions["instructor"]
         if (roster and result and resolution.resolved_value is None
                 and instructor.raw and instructor_value):
-            first_suggestion, first_ambiguous, _ = roster.suggest_name(instructor.raw)
-            stage3_suggestion, stage3_ambiguous, _ = roster.suggest_name(instructor_value)
-            if (first_suggestion and first_suggestion == stage3_suggestion
-                    and not first_ambiguous and not stage3_ambiguous):
+            suggestions = []
+            for reading in (stage1, stage2, instructor_value):
+                if not reading:
+                    continue
+                suggestion, ambiguous, _ = roster.suggest_name(reading)
+                if suggestion and not ambiguous:
+                    suggestions.append(suggestion)
+            winners = {suggestion for suggestion in suggestions
+                       if suggestions.count(suggestion) >= 2}
+            if len(winners) == 1:
+                winner = next(iter(winners))
                 resolutions["instructor"] = FieldResolution(
-                    "instructor", stage1, stage2, instructor_value, first_suggestion,
-                    first_suggestion, "independent fuzzy instructor readings resolved unique roster member",
+                    "instructor", stage1, stage2, instructor_value, winner,
+                    winner, "two independent fuzzy instructor readings resolved unique roster member",
                     False, attempt)
 
     prefixes = sorted({name.rsplit(".", 1)[0] for name in first if name.startswith("attendee.")})
