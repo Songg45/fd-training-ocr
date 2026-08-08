@@ -139,7 +139,8 @@ def _suppression_preserves_ink(master: Image.Image, raw: Image.Image,
 def make_request(page: Image.Image, region: Region,
                  master: Image.Image | None = None, *, padding: int = 12,
                  expand: int = 0, force_variant: str | None = None,
-                 attempt: int = 1, stronger: bool = False) -> RecognitionRequest:
+                 attempt: int = 1, stronger: bool = False,
+                 independent_second: bool = False) -> RecognitionRequest:
     """Crop one eligible field and construct its field-specific request."""
     if region.kind == "signature" or region.name.endswith(".signature"):
         raise RecognitionError("signature regions are never cropped or recognized")
@@ -160,7 +161,12 @@ def make_request(page: Image.Image, region: Region,
     crop = _padded(crop, padding)
     kind = field_type(region)
     reinforcement = " Treat any output outside the expected format as invalid; inspect each character again." if stronger else ""
-    prompt = (_PROMPTS[kind] + reinforcement + " Return one JSON object with exactly these keys: "
+    instruction = _PROMPTS[kind]
+    if independent_second:
+        instruction = ("Independently inspect the pen strokes in this image and report only the handwritten "
+                       f"{kind.replace('_', ' ')} value. Work character-by-character from the image; do not infer "
+                       "from any prior transcription. " + instruction.split(". ", 1)[-1])
+    prompt = (instruction + reinforcement + " Return one JSON object with exactly these keys: "
               '"value" (string or null), "confidence" (0 to 1), and '
               '"alternatives" (array of strings). Do not infer missing text.')
     return RecognitionRequest(region.name, kind, prompt, crop, box, variant, attempt)
@@ -202,6 +208,7 @@ def _acceptable(result: RecognitionResult) -> bool:
 
 def _attempt_record(result: RecognitionResult, request: RecognitionRequest) -> dict[str, object]:
     return {"attempt": request.attempt, "variant": request.variant,
+            "stage": request.attempt, "prompt": request.prompt,
             "provider": result.provider, "model": result.model,
             "source_region": list(request.source_region), "value": result.value,
             "confidence": result.confidence, "alternatives": list(result.alternatives),
@@ -238,6 +245,7 @@ class MockRecognitionProvider:
             "attendee_row": {"unit_id": None, "print_name": None,
                              "handwriting_supports_candidate": False,
                              "alternatives": {"unit_id": [], "print_name": []}},
+            "field": {"value": None, "alternatives": {"value": []}},
         }
         raw = json.dumps(self.context_responses.get(request.verification_id, defaults[request.schema]),
                          sort_keys=True, separators=(",", ":"))
@@ -310,6 +318,7 @@ def parse_context_response(raw: str, request: ContextVerificationRequest,
         "instructor": ({"instructor", "handwriting_supports_candidate", "alternatives"}, ("instructor",)),
         "attendee_row": ({"unit_id", "print_name", "handwriting_supports_candidate", "alternatives"},
                          ("unit_id", "print_name")),
+        "field": ({"value", "alternatives"}, ("value",)),
     }
     if request.schema not in schemas:
         raise RecognitionError("unknown context verification schema")
@@ -328,7 +337,7 @@ def parse_context_response(raw: str, request: ContextVerificationRequest,
     supports = data.get("handwriting_supports_candidate")
     if request.schema == "time_group" and not isinstance(consistent, bool):
         raise RecognitionError("internally_consistent must be boolean")
-    if request.schema != "time_group" and not isinstance(supports, bool):
+    if request.schema in {"instructor", "attendee_row"} and not isinstance(supports, bool):
         raise RecognitionError("handwriting_supports_candidate must be boolean")
     return ContextVerificationResult(request.verification_id, values,
         {key: tuple(items) for key, items in alternatives.items()}, consistent, supports,
@@ -339,7 +348,7 @@ def recognize_fields(page: Image.Image, master: Image.Image,
                      template: TemplateDefinition, provider: RecognitionProvider,
                      populated_rows: Sequence[int] = (), *, crop_padding: int = 12,
                      max_attempts: int = 3) -> tuple[RecognitionResult, ...]:
-    """Recognize text fields and the two non-signature cells of populated rows."""
+    """Run two independent reads of every eligible non-signature handwriting field."""
     populated = set(populated_rows)
     results = []
     for region in template.regions:
@@ -351,16 +360,22 @@ def recognize_fields(page: Image.Image, master: Image.Image,
             continue
         attempts: list[dict[str, object]] = []
         result = None
-        # Initial objective variant, followed by raw and wider raw context. Requests stay sequential.
-        specifications = ((None, crop_padding, 0, False),
-                          ("raw", crop_padding + 4, 0, True),
-                          ("raw", crop_padding + 8, 10, True))
-        for number, (variant, padding, expand, stronger) in enumerate(specifications[:max_attempts], 1):
+        # Stage 2 is always independent: raw, wider, differently worded, and receives no Stage-1 value.
+        specifications = ((None, crop_padding, 0, False, False),
+                          ("raw", crop_padding + 8, 10, True, True))
+        for number, (variant, padding, expand, stronger, independent) in enumerate(specifications, 1):
             request = make_request(page, region, master, padding=padding, expand=expand,
-                                   force_variant=variant, attempt=number, stronger=stronger)
+                                   force_variant=variant, attempt=number, stronger=stronger,
+                                   independent_second=independent)
             result = provider.recognize(request)
             attempts.append(_attempt_record(result, request))
-            if _acceptable(result): break
         assert result is not None
-        results.append(replace(result, attempts=tuple(attempts)))
+        # Stage 1 remains the raw machine transcription; later stages select without overwriting it.
+        first = attempts[0]
+        results.append(replace(result, value=first["value"], normalized_as_returned=first["value"],
+                               confidence=float(first["confidence"]),
+                               alternatives=tuple(first["alternatives"]),
+                               raw_output=str(first["raw_output"]), variant=str(first["variant"]),
+                               source_region=tuple(first["source_region"]),
+                               attempts=tuple(attempts)))
     return tuple(results)

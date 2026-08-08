@@ -89,6 +89,11 @@ def processor_factory(*, work_dir: Path, master_path: Path, template_path: Path,
             resolution = second_pass.resolutions.get(item.field_name)
             fields[item.field_name].update({
                 "first_pass": item.value,
+                "stage_1": item.attempts[0] if item.attempts else None,
+                "stage_2": item.attempts[1] if len(item.attempts) > 1 else None,
+                "stage_3": resolution.second_pass if resolution else None,
+                "stage_3_attempts": list(resolution.attempts) if resolution else [],
+                # Legacy aliases retained for existing detailed-record consumers.
                 "second_pass": resolution.second_pass if resolution else None,
                 "second_pass_attempts": list(resolution.attempts) if resolution else [],
                 "roster_suggestion": resolution.roster_suggestion if resolution else assessment.suggested_canonical,

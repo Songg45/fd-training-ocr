@@ -134,13 +134,15 @@ records preserve the chosen variant and every attempt. Roster matching is non-de
 raw OCR remains machine output while a canonical suggestion, ambiguity flag, and reason
 are exposed for human review.
 
-Questionable results receive one bounded contextual Pass-2 request. The verifier groups
-the labeled start/end/total-hours fields, checks the instructor against only an
+Recognition uses three stages. Every field is first read from the preferred tight crop,
+then independently read from a wider raw crop with different prompt wording and no access
+to the first result. Only exceptions receive a third contextual request. The verifier
+groups labeled start/end/total-hours fields, checks the instructor against only an
 unambiguous nearby roster candidate, and reads each populated attendee's unit-ID/name
-cells together. Attendee context stops at the signature-column boundary. Raw Pass-1
-values, every Pass-2 attempt, provider/model, candidate, resolved value, and resolution
-reason remain in detailed JSON. Automatic resolution requires two independent agreeing
-signals; disagreement or malformed verifier output remains review-required.
+cells together. Attendee context stops at the excluded-column boundary. Every stage,
+crop variant, prompt, response, provider/model, candidate, resolved value, and reason
+remain in detailed JSON. Automatic resolution requires two independent agreeing signals
+plus deterministic validation; contradictions or malformed output remain review-required.
 
 An opt-in smoke test is available with `FD_OCR_LIVE_OLLAMA=1`; optionally set
 `FD_OCR_OLLAMA_MODEL`. It skips with setup guidance if the service/model is unavailable.

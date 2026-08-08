@@ -43,7 +43,8 @@ class RecognitionTests(unittest.TestCase):
         provider = MockRecognitionProvider(responses)
         recognize_fields(self.page, self.page, template(), provider, populated_rows=[1])
         self.assertEqual([r.field_name for r in provider.requests],
-                         ["date", "attendee.01.unit_id", "attendee.01.print_name"])
+                         ["date", "date", "attendee.01.unit_id", "attendee.01.unit_id",
+                          "attendee.01.print_name", "attendee.01.print_name"])
         self.assertNotEqual(provider.requests[1].prompt, provider.requests[2].prompt)
 
     def test_signatures_are_never_cropped_serialized_or_sent(self):
@@ -90,23 +91,26 @@ class RecognitionTests(unittest.TestCase):
                                force_variant=None)
         self.assertEqual(request.variant, "raw")
 
-    def test_invalid_format_retries_sequentially_and_preserves_attempts(self):
+    def test_two_independent_stages_run_sequentially_and_preserve_stage1(self):
         class SequenceProvider:
             name, model = "sequence", "test"
             def __init__(self): self.requests = []
             def recognize(self, request):
                 self.requests.append(request)
-                value = "not-a-date" if len(self.requests) < 3 else "01/02/26"
+                value = "not-a-date" if len(self.requests) == 1 else "01/02/26"
                 return parse_response(json.dumps({"value": value, "confidence": .99,
                     "alternatives": []}), request, self.name, self.model)
         provider = SequenceProvider()
         result = recognize_fields(self.page, self.page, template(), provider)[0]
-        self.assertEqual(result.value, "01/02/26")
-        self.assertEqual([x.attempt for x in provider.requests], [1, 2, 3])
-        self.assertEqual([x["variant"] for x in result.attempts], ["raw", "raw", "raw"])
+        self.assertEqual(result.value, "not-a-date")
+        self.assertEqual([x.attempt for x in provider.requests], [1, 2])
+        self.assertEqual([x["value"] for x in result.attempts], ["not-a-date", "01/02/26"])
+        self.assertEqual([x["variant"] for x in result.attempts], ["raw", "raw"])
         self.assertEqual([(x["provider"], x["model"]) for x in result.attempts],
-                         [("sequence", "test")] * 3)
-        self.assertGreater(provider.requests[2].image.width, provider.requests[1].image.width)
+                         [("sequence", "test")] * 2)
+        self.assertGreater(provider.requests[1].image.width, provider.requests[0].image.width)
+        self.assertNotEqual(provider.requests[0].prompt, provider.requests[1].prompt)
+        self.assertNotIn("not-a-date", provider.requests[1].prompt)
 
 
 if __name__ == "__main__":

@@ -10,17 +10,22 @@ from fd_training_ocr.template import Region, TemplateDefinition
 from fd_training_ocr.validation import Roster, RosterMember, validate
 
 
-def result(name, value, confidence=.99, alternatives=()):
+def result(name, value, confidence=.99, alternatives=(), stage2=None):
+    second = value if stage2 is None else stage2
+    attempts = ({"value": value, "confidence": confidence, "alternatives": list(alternatives)},
+                {"value": second, "confidence": confidence, "alternatives": []})
     return RecognitionResult(name, value, value, confidence, tuple(alternatives), "raw", "mock",
-                             "pass1", (0, 0, 10, 10))
+                             "pass1", (0, 0, 10, 10), attempts=attempts)
 
 
 def template():
     regions = (
+        Region("date", "text", (.10, .02, .20, .06), {}),
         Region("start_time", "text", (.10, .10, .12, .08), {}),
         Region("end_time", "text", (.25, .10, .12, .08), {}),
         Region("total_hours", "text", (.40, .10, .10, .08), {}),
         Region("instructor", "text", (.10, .24, .30, .08), {}),
+        Region("description", "text", (.10, .70, .50, .08), {}),
         Region("attendee.01.unit_id", "attendee_cell", (.10, .40, .15, .08), {"row": 1}),
         Region("attendee.01.print_name", "attendee_cell", (.25, .40, .30, .08), {"row": 1}),
         Region("attendee.01.signature", "signature", (.55, .40, .35, .08), {"row": 1}),
@@ -44,6 +49,19 @@ class ContextParserTests(unittest.TestCase):
 
 
 class SecondPassTests(unittest.TestCase):
+    def test_only_disagreeing_generic_field_triggers_stage3(self):
+        first = (result("date", "12/17/25", stage2="12/11/25"),
+                 result("description", "Synthetic drill"))
+        report = validate(first)
+        provider = MockRecognitionProvider(context_responses={"date": {
+            "value": "12/17/25", "alternatives": {"value": []}}})
+        verified = verify_second_pass(Image.new("L", (1000, 1000), 255), template(), provider,
+                                      first, report)
+        self.assertEqual([request.verification_id for request in provider.context_requests], ["date"])
+        self.assertEqual(verified.resolutions["date"].resolved_value, "12/17/25")
+        self.assertEqual(verified.resolutions["description"].resolution_reason,
+                         "stages 1 and 2 agree after normalized deterministic validation")
+
     def test_clean_fields_do_not_trigger_context_calls(self):
         first = (result("start_time", "16:00"), result("end_time", "17:00"),
                  result("total_hours", "1"), result("instructor", "Synthetic Instructor"))
