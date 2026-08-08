@@ -85,11 +85,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
     if args.command == "process":
         destination = args.output_dir or config.output_dir / "batch"
-        provider = (OllamaVisionProvider(config.ollama_model, config.ollama_endpoint, config.ollama_timeout_seconds)
-                    if args.provider == "ollama" else MockRecognitionProvider())
+        if args.provider == "ollama":
+            provider = OllamaVisionProvider(config.ollama_model, config.ollama_endpoint,
+                                            config.ollama_timeout_seconds)
+            stage3_provider = OllamaVisionProvider(config.ollama_stage3_model,
+                                                   config.ollama_endpoint,
+                                                   config.ollama_timeout_seconds)
+        else:
+            provider = MockRecognitionProvider()
+            stage3_provider = provider
         try:
             processor = processor_factory(work_dir=destination / "work", master_path=args.master,
                 template_path=args.template, provider=provider, repository_root=Path.cwd(),
+                stage3_provider=stage3_provider,
                 roster_path=config.roster_path, pdftoppm=args.pdftoppm,
                 recognition_crop_padding=config.recognition_crop_padding_pixels,
                 recognition_max_attempts=config.recognition_max_attempts,

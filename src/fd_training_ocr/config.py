@@ -17,6 +17,7 @@ class AppConfig:
     offline: bool = True
     ollama_endpoint: str = "http://127.0.0.1:11434"
     ollama_model: str = "qwen2.5vl:7b"
+    ollama_stage3_model: str = "qwen3-vl:8b-instruct"
     ollama_timeout_seconds: float = 90.0
     roster_path: Path | None = None
     valid_apparatus: tuple[str, ...] = ("Engine 54", "Tanker 54", "Brush 54", "Engine 254", "Tanker 854", "Brush 254")
@@ -34,7 +35,7 @@ class AppConfig:
 
 def _build_config(values: Mapping[str, Any]) -> AppConfig:
     allowed = {"output_dir", "template_dir", "log_level", "offline",
-               "ollama_endpoint", "ollama_model", "ollama_timeout_seconds", "roster_path",
+               "ollama_endpoint", "ollama_model", "ollama_stage3_model", "ollama_timeout_seconds", "roster_path",
                "valid_apparatus", "valid_locations", "recognition_crop_padding_pixels",
                "recognition_max_attempts"}
     unknown = set(values) - allowed
@@ -49,12 +50,15 @@ def _build_config(values: Mapping[str, Any]) -> AppConfig:
         raise ValueError("app.offline must be a boolean")
     endpoint = values.get("ollama_endpoint", "http://127.0.0.1:11434")
     model = values.get("ollama_model", "qwen2.5vl:7b")
+    stage3_model = values.get("ollama_stage3_model", "qwen3-vl:8b-instruct")
     timeout = values.get("ollama_timeout_seconds", 90.0)
     parsed_endpoint = urlsplit(endpoint) if isinstance(endpoint, str) else None
     if parsed_endpoint is None or parsed_endpoint.scheme != "http" or parsed_endpoint.hostname not in {"127.0.0.1", "localhost", "::1"}:
         raise ValueError("app.ollama_endpoint must be a loopback HTTP URL")
     if not isinstance(model, str) or not model.strip():
         raise ValueError("app.ollama_model must be a non-empty string")
+    if not isinstance(stage3_model, str) or not stage3_model.strip():
+        raise ValueError("app.ollama_stage3_model must be a non-empty string")
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
         raise ValueError("app.ollama_timeout_seconds must be positive")
     roster_path = values.get("roster_path")
@@ -80,6 +84,7 @@ def _build_config(values: Mapping[str, Any]) -> AppConfig:
         offline=offline,
         ollama_endpoint=endpoint,
         ollama_model=model,
+        ollama_stage3_model=stage3_model,
         ollama_timeout_seconds=float(timeout),
         roster_path=Path(roster_path) if roster_path else None,
         valid_apparatus=tuple(apparatus),

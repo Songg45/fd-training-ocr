@@ -29,6 +29,7 @@ def load_optional_roster(path: Path | None, repository_root: Path):
 
 def processor_factory(*, work_dir: Path, master_path: Path, template_path: Path,
                       provider: RecognitionProvider, repository_root: Path,
+                      stage3_provider: RecognitionProvider | None = None,
                       roster_path: Path | None = None, pdftoppm: Path | None = None,
                       policy: ValidationPolicy = ValidationPolicy(), recognition_crop_padding: int = 12,
                       recognition_max_attempts: int = 3) -> Callable[[Path, str], FormRecord]:
@@ -64,7 +65,8 @@ def processor_factory(*, work_dir: Path, master_path: Path, template_path: Path,
         apparatus_map = {"truck.engine54":"Engine 54", "truck.tanker54":"Tanker 54", "truck.engine254":"Engine 254", "truck.brush54":"Brush 54", "truck.tanker854":"Tanker 854"}
         apparatus = [apparatus_map[x] for x in selected if x in apparatus_map]
         first_report = validate(recognized, roster=roster, selected_apparatus=apparatus, policy=policy)
-        second_pass = verify_second_pass(page, definition, provider, recognized, first_report, roster)
+        second_pass = verify_second_pass(page, definition, stage3_provider or provider,
+                                         recognized, first_report, roster)
         effective = tuple(replace(item, value=second_pass.resolutions[item.field_name].resolved_value,
                                   normalized_as_returned=second_pass.resolutions[item.field_name].resolved_value)
             if item.field_name in second_pass.resolutions and

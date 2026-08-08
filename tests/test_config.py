@@ -21,9 +21,10 @@ class ConfigTests(unittest.TestCase):
     def test_loads_local_ollama_settings(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.toml"
-            path.write_text('[app]\nollama_model="vision:3b"\nollama_timeout_seconds=15\n', encoding="utf-8")
+            path.write_text('[app]\nollama_model="vision:3b"\nollama_stage3_model="vision:8b"\nollama_timeout_seconds=15\n', encoding="utf-8")
             config = load_config(path)
         self.assertEqual(config.ollama_model, "vision:3b")
+        self.assertEqual(config.ollama_stage3_model, "vision:8b")
         self.assertEqual(config.ollama_timeout_seconds, 15.0)
 
     def test_loads_bounded_recognition_crop_settings(self) -> None:

@@ -21,6 +21,12 @@ py -3.12 -m venv .venv
 python -m pip install -e .
 ```
 
+For the optional Windows desktop GUI, install PySide6 through the GUI extra:
+
+```powershell
+python -m pip install -e ".[gui]"
+```
+
 ## Configuration
 
 Configuration is optional and uses TOML. Unknown keys are rejected to catch mistakes early.
@@ -33,6 +39,7 @@ log_level = "INFO"
 offline = true
 ollama_endpoint = "http://127.0.0.1:11434"
 ollama_model = "qwen2.5vl:7b"
+ollama_stage3_model = "qwen3-vl:8b-instruct"
 ollama_timeout_seconds = 90
 roster_path = "C:\\Temp\\fd-training-ocr-roster.json"
 valid_apparatus = ["Engine 54", "Tanker 54", "Brush 54", "Engine 254", "Tanker 854", "Brush 254"]
@@ -77,6 +84,33 @@ warnings, and review provenance. Signature fields are rejected at the export bou
 The optional external roster remains outside Git; if configured but missing or invalid,
 processing continues conservatively and marks the record for review without logging roster
 contents or its path.
+
+## Local desktop GUI
+
+The optional PySide6 desktop front end processes one PDF at a time while retaining the
+tested CLI pipeline. It shows a zoomable and pannable page preview on the left and
+read-only structured results plus the complete JSON record on the right. OCR runs on a
+worker thread, and a prominent banner identifies records requiring human review. Export
+Results saves the currently displayed, signature-free JSON record to a chosen location.
+
+Launch it with the same local master, template, configuration, and Poppler executable used
+by the CLI:
+
+```powershell
+fd-training-ocr-gui `
+  --config C:\Temp\fd-training-ocr-config.toml `
+  --master C:\Github\OCR\fd-training-ocr\output\template-preparation\cleaned-master.png `
+  --template C:\Github\OCR\fd-training-ocr\templates\pilot_fd_training_sign_in\v1\template.json `
+  --pdftoppm C:\path\to\pdftoppm.exe
+```
+
+Stages 1 and 2 use `ollama_model` (`qwen2.5vl:7b` by default); exception-only Stage 3 uses
+`ollama_stage3_model` (`qwen3-vl:8b-instruct` by default). Both endpoints remain restricted
+to loopback. The preview is rendered into a temporary local directory and deleted when the
+window closes. The existing pipeline masks signature regions before retaining aligned
+artifacts or sending crops to Ollama. This checkpoint is intentionally read-only: it does
+not yet edit corrections, highlight source regions, process multiple pages/forms, or
+provide packaging automation.
 
 Prepare a local master (the output directory is ignored by Git):
 
