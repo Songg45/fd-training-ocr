@@ -257,3 +257,61 @@ The prototype is complete when it can process a folder of Pilot Fire Department 
 - Preserve backward compatibility for existing template versions.
 - Document any assumption that affects extracted meaning.
 - Stop and request clarification when a form revision changes field semantics rather than guessing.
+
+## Checkpoint Protocol
+
+Development is iterative. An implementation agent must stop at each checkpoint below and report:
+
+- files changed and commits created;
+- commands and tests run, with results;
+- a short demonstration or representative output;
+- assumptions, risks, and unresolved questions;
+- the exact scope proposed for the next checkpoint.
+
+Do not begin the next checkpoint until the user or coordinating agent explicitly approves it. A checkpoint approval authorizes only the next listed checkpoint, not the remainder of the project.
+
+### Checkpoint 1 - Project Foundation
+
+- Create the documented package layout, `pyproject.toml`, README, and privacy-safe `.gitignore`.
+- Add the CLI shell and configuration loading without implementing recognition.
+- Add an offline test harness and confirm tests run without external services.
+- Stop for review before processing the real template.
+
+### Checkpoint 2 - PDF Rendering and Template Preparation
+
+- Implement PDF rendering, rotation, deskewing, cropping, and normalization.
+- Generate the cleaned master and alignment diagnostics locally without committing source or derived sensitive images.
+- Add tests using synthetic fixtures.
+- Stop for visual review and approval of the cleaned master.
+
+### Checkpoint 3 - Field Map and Alignment
+
+- Define the versioned field map and template configuration.
+- Implement page alignment and field-region overlays.
+- Demonstrate overlays on representative local scans without committing them.
+- Stop for coordinate and alignment review.
+
+### Checkpoint 4 - Deterministic Detection
+
+- Implement checkbox, truck-selection, populated-row, and line-suppression logic.
+- Report field-specific evaluation results using synthetic or approved fixtures.
+- Stop for detection-quality review.
+
+### Checkpoint 5 - Recognition Integration
+
+- Implement the provider-neutral handwriting-recognition interface and local mock.
+- Integrate one approved recognizer only after privacy and credential handling are agreed.
+- Demonstrate structured extraction with confidence and alternatives.
+- Stop for recognition-quality and data-handling review.
+
+### Checkpoint 6 - Validation and Review Workflow
+
+- Implement normalization, cross-field validation, warnings, and review-state calculation.
+- Build the local human-review workflow.
+- Stop for an end-to-end review exercise on a small approved sample.
+
+### Checkpoint 7 - Batch Export and Release Candidate
+
+- Implement idempotent batch processing, JSON/CSV exports, summaries, and failure isolation.
+- Run the agreed evaluation suite and document results by field type.
+- Stop for release acceptance; do not deploy or process a production archive without separate approval.
