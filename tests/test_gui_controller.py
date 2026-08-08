@@ -11,6 +11,7 @@ from fd_training_ocr.gui_controller import (GuiPaths, apply_event_selection, app
                                              effective_facilities,
                                              discover_pdfs, export_record, index_after_removal, structured_rows,
                                              load_gui_state, save_gui_state, unprocessed_sources,
+                                             attendee_row_from_field, remove_attendee,
                                              roster_table_rows, save_roster_table,
                                              validate_pdf, validate_pdfs)
 
@@ -79,6 +80,29 @@ class GuiControllerTests(unittest.TestCase):
         self.assertEqual(record["fields"]["instructor"]["review"],
                          {"status":"corrected", "reviewed_at":"2026-08-08T12:00:00Z"})
         self.assertTrue(record["review"]["corrections_applied"])
+
+    def test_attendee_deletion_removes_active_values_and_preserves_audit(self):
+        unit = {"raw":"4554", "normalized":"4554"}
+        name = {"raw":"Brandon Tucker", "normalized":"Brandon Tucker Sr"}
+        record = {"fields":{"attendee.01.unit_id":unit,
+                            "attendee.01.print_name":name,
+                            "description":{"raw":"Driver training"}},
+                  "attendees":({"row":1, "unit_id":"4554",
+                                 "print_name":"Brandon Tucker Sr"},),
+                  "review":{"corrections_applied":False, "reviewed_at":None}}
+        remove_attendee(record, 1, "2026-08-08T12:00:00Z")
+        self.assertNotIn("attendee.01.unit_id", record["fields"])
+        self.assertNotIn("attendee.01.print_name", record["fields"])
+        self.assertEqual(record["attendees"], [])
+        removed = record["review"]["removed_attendees"][0]
+        self.assertEqual(removed["fields"]["attendee.01.unit_id"], unit)
+        self.assertEqual(removed["attendees"][0]["unit_id"], "4554")
+        self.assertTrue(record["review"]["corrections_applied"])
+
+    def test_attendee_row_is_derived_only_from_attendee_fields(self):
+        self.assertEqual(attendee_row_from_field("attendee.09.print_name"), 9)
+        self.assertEqual(attendee_row_from_field("attendee.19.unit_id"), 19)
+        self.assertIsNone(attendee_row_from_field("description"))
 
     def test_unresolved_stage3_suggestion_is_shown_in_warnings(self):
         rows = structured_rows({"fields":{"description":{"raw":"system", "normalized":"system",

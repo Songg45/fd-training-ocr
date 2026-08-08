@@ -182,6 +182,39 @@ def apply_gui_edit(record: MutableMapping[str, Any], field_name: str, value: str
     review["reviewed_at"] = stamp
 
 
+def attendee_row_from_field(field_name: str) -> int | None:
+    match = re.fullmatch(r"attendee\.(\d+)\.(?:unit_id|print_name)", field_name)
+    return int(match.group(1)) if match else None
+
+
+def remove_attendee(record: MutableMapping[str, Any], row: int,
+                    reviewed_at: str | None = None) -> None:
+    """Remove an active attendee while retaining its machine evidence for audit."""
+    if row < 1:
+        raise ValueError("attendee row must be positive")
+    prefix = f"attendee.{row:02d}."
+    fields = record.get("fields")
+    if not isinstance(fields, MutableMapping):
+        raise ValueError("record has no editable fields")
+    removed_fields = {name: fields.pop(name) for name in list(fields) if name.startswith(prefix)}
+    attendees = record.get("attendees", [])
+    removed_attendees = []
+    if isinstance(attendees, (list, tuple)):
+        removed_attendees = [item for item in attendees
+                             if isinstance(item, Mapping) and item.get("row") == row]
+        record["attendees"] = [item for item in attendees
+                               if not (isinstance(item, Mapping) and item.get("row") == row)]
+    if not removed_fields and not removed_attendees:
+        raise ValueError(f"attendee row {row} is not present")
+    stamp = reviewed_at or datetime.now(timezone.utc).isoformat()
+    review = record.setdefault("review", {})
+    removed = review.setdefault("removed_attendees", [])
+    removed.append({"row": row, "fields": removed_fields,
+                    "attendees": removed_attendees, "reviewed_at": stamp})
+    review["corrections_applied"] = True
+    review["reviewed_at"] = stamp
+
+
 def apply_facilities_edit(record: MutableMapping[str, Any], facilities: list[str],
                           reviewed_at: str | None = None) -> None:
     """Store reviewed facilities separately from the detector's machine result."""

@@ -14,7 +14,8 @@ from .gui_controller import (EVENT_SELECTIONS, GuiPaths, apply_event_selection, 
                              automatic_export, build_processor, effective_event_selection,
                              export_record, load_gui_state, process_pdf, save_gui_state,
                              discover_pdfs, index_after_removal, structured_rows,
-                             roster_table_rows, save_roster_table, unprocessed_sources,
+                             attendee_row_from_field, remove_attendee, roster_table_rows,
+                             save_roster_table, unprocessed_sources,
                              validate_pdfs)
 from .pdf_render import render_pdf
 
@@ -107,18 +108,20 @@ def main(argv=None) -> int:
             self.process_button = QtWidgets.QPushButton("Process")
             self.process_all_button = QtWidgets.QPushButton("Process All")
             self.stop_button = QtWidgets.QPushButton("Stop After Current")
+            self.delete_attendee_button = QtWidgets.QPushButton("Delete Attendee")
             self.export_button = QtWidgets.QPushButton("Export Results")
             self.remove_button.setEnabled(False)
             self.previous_button.setEnabled(False); self.next_button.setEnabled(False)
             self.process_button.setEnabled(False); self.process_all_button.setEnabled(False)
             self.stop_button.setEnabled(False); self.export_button.setEnabled(False)
+            self.delete_attendee_button.setEnabled(False)
             self.progress = QtWidgets.QProgressBar(); self.progress.setRange(0, 1); self.progress.setValue(0)
             self.status = QtWidgets.QLabel("Load a PDF to begin")
             for widget in (self.load_button, self.folder_button, self.roster_button,
                            self.remove_button,
                            self.previous_button, self.page_label,
                            self.next_button, self.process_button, self.process_all_button,
-                           self.stop_button, self.export_button,
+                           self.stop_button, self.delete_attendee_button, self.export_button,
                            self.progress, self.status): controls.addWidget(widget)
             self.warning = QtWidgets.QLabel("")
             self.warning.setStyleSheet("background:#8b1e1e;color:white;font-weight:bold;padding:8px;")
@@ -133,6 +136,7 @@ def main(argv=None) -> int:
                                        QtWidgets.QAbstractItemView.EditTrigger.EditKeyPressed)
             self.table.itemChanged.connect(self.result_edited)
             self.table.cellDoubleClicked.connect(self.summary_activated)
+            self.table.currentCellChanged.connect(lambda *_: self.update_attendee_button())
             tabs.addTab(self.table, "Structured Results")
             self.raw = QtWidgets.QPlainTextEdit(); self.raw.setReadOnly(True)
             tabs.addTab(self.raw, "Raw JSON")
@@ -145,6 +149,7 @@ def main(argv=None) -> int:
             self.process_button.clicked.connect(self.process)
             self.process_all_button.clicked.connect(self.process_all)
             self.stop_button.clicked.connect(self.request_stop)
+            self.delete_attendee_button.clicked.connect(self.delete_selected_attendee)
             self.export_button.clicked.connect(self.export)
             self.restore_state()
 
@@ -378,6 +383,37 @@ def main(argv=None) -> int:
             self.stop_button.setEnabled(
                 self.busy and self.batch_total > 0 and not self.stop_requested)
             self.export_button.setEnabled(not self.busy and self.record is not None)
+            self.update_attendee_button()
+
+        def selected_attendee_row(self):
+            row = self.table.currentRow()
+            item = self.table.item(row, 0) if row >= 0 else None
+            return attendee_row_from_field(item.text()) if item is not None else None
+
+        def update_attendee_button(self):
+            self.delete_attendee_button.setEnabled(
+                not self.busy and self.record is not None
+                and self.selected_attendee_row() is not None)
+
+        def delete_selected_attendee(self):
+            attendee_row = self.selected_attendee_row()
+            if self.record is None or attendee_row is None:
+                return
+            answer = QtWidgets.QMessageBox.question(
+                self, "Delete attendee",
+                f"Remove attendee row {attendee_row} from this OCR result?\n\n"
+                "The scanned PDF will not be changed and machine evidence will remain in the audit trail.")
+            if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+                return
+            try:
+                remove_attendee(self.record, attendee_row)
+                automatic_export(self.record, args.export_dir)
+                self.persist_state()
+                self.display_record(self.record)
+                self.status.setText(
+                    f"Deleted attendee row {attendee_row}; automatic export updated")
+            except (OSError, ValueError) as exc:
+                QtWidgets.QMessageBox.critical(self, "Unable to delete attendee", str(exc))
 
         def process(self):
             self.set_busy(True); self.status.setText("Processing locally: Stages 1–2 Qwen2.5-VL, Stage 3 Qwen3-VL…")
@@ -482,6 +518,7 @@ def main(argv=None) -> int:
             needs_review = record.get("status") == "review_required"
             self.warning.setText("REVIEW REQUIRED — " + ("; ".join(record.get("warnings", ())) or "one or more fields require review"))
             self.warning.setVisible(needs_review); self.status.setText("Complete — review required" if needs_review else "Complete")
+            self.update_attendee_button()
 
         def result_edited(self, item):
             if self.record is None or item.column() != 1:
