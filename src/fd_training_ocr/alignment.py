@@ -53,6 +53,21 @@ def _orientation_score(candidate: Image.Image, master: Image.Image) -> float:
     return _coverage(_ink(master, (220, 285)), _ink(candidate, (220, 285)), tolerance=2)
 
 
+def _passes_quality(form_coverage: float, anchor_scores: list[float], deskew: float,
+                    thresholds: dict[str, object]) -> bool:
+    """Accept normal anchors or a strong header plus globally matching form."""
+    minimum_form = float(thresholds["min_form_coverage"])
+    minimum_anchor = float(thresholds["min_anchor_coverage"])
+    deskew_ok = abs(deskew) <= float(thresholds["max_abs_deskew_degrees"])
+    anchors_ok = not anchor_scores or min(anchor_scores) >= minimum_anchor
+    # Clean rescans can disagree with the noisy master's thin table-line pixels
+    # while the stable dark header and overall form still align exceptionally
+    # well. The first configured anchor is the header by template convention.
+    strong_header_override = bool(anchor_scores and anchor_scores[0] >= .90)
+    return (form_coverage >= minimum_form and deskew_ok
+            and (anchors_ok or strong_header_override))
+
+
 def align_image(source: Path, master_path: Path, output_dir: Path,
                 template: TemplateDefinition) -> AlignmentResult:
     """Normalize rotation, deskew, crop and scale a page into master coordinates."""
@@ -88,9 +103,7 @@ def align_image(source: Path, master_path: Path, output_dir: Path,
         Image.fromarray(master_ink).filter(ImageFilter.MaxFilter(7))) > 0)
     excess_ratio = float(excess_ink.sum() / max(1, aligned_ink.sum()))
     thresholds = template.alignment["quality_thresholds"]
-    passed = (form_coverage >= float(thresholds["min_form_coverage"])
-              and anchor_coverage >= float(thresholds["min_anchor_coverage"])
-              and abs(deskew) <= float(thresholds["max_abs_deskew_degrees"]))
+    passed = _passes_quality(form_coverage, anchor_scores, deskew, thresholds)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     aligned_path = output_dir / "aligned.png"

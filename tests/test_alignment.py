@@ -5,7 +5,7 @@ import unittest
 
 from PIL import Image, ImageDraw
 
-from fd_training_ocr.alignment import AlignmentError, align_image
+from fd_training_ocr.alignment import AlignmentError, _passes_quality, align_image
 from fd_training_ocr.template import load_template
 
 
@@ -38,6 +38,13 @@ def write_template(path: Path, *, minimum: float = 0.60) -> None:
 
 
 class AlignmentTests(unittest.TestCase):
+    def test_strong_header_and_passing_form_override_weak_table_anchor(self) -> None:
+        thresholds = {"min_form_coverage": .70, "min_anchor_coverage": .67,
+                      "max_abs_deskew_degrees": 4.0}
+        self.assertTrue(_passes_quality(.706, [.973, .490], .50, thresholds))
+        self.assertFalse(_passes_quality(.699, [.973, .490], .50, thresholds))
+        self.assertFalse(_passes_quality(.706, [.89, .490], .50, thresholds))
+
     def test_rotated_skewed_form_aligns_and_writes_overlay(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
