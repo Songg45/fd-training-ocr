@@ -26,6 +26,7 @@ class AppConfig:
         ("PFD", "Pilot FD"),
         ("PF0", "Pilot FD"),
         ("F0", "Pilot FD"),
+        ("PRO", "Pilot FD"),
         ("Pilot", "Pilot FD"),
         ("Pilot Fire", "Pilot FD"),
         ("Pilot Fire Dep", "Pilot FD"),
@@ -78,7 +79,7 @@ def _build_config(values: Mapping[str, Any]) -> AppConfig:
     apparatus = values.get("valid_apparatus", list(AppConfig.valid_apparatus))
     locations = values.get("valid_locations", list(AppConfig.valid_locations))
     pilot_spellings = {"pilot", "pilot fire", "pilot fire dep", "pilot fire dept",
-                       "pilot fire department", "pfd", "pf0", "f0", "pilot fd"}
+                       "pilot fire department", "pfd", "pf0", "f0", "pro", "pilot fd"}
     locations = ["Pilot FD" if item.strip().casefold() in pilot_spellings else item
                  for item in locations] if isinstance(locations, list) else locations
     if isinstance(locations, list):

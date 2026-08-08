@@ -74,6 +74,20 @@ def detect_options(master: Image.Image, completed: Image.Image,
                 and best.added_ink_ratio - runner_up >= .003):
             scores = tuple(replace(score, selected=True) if score.name == best.name else score
                            for score in scores)
+    # Facility marks are independent and more than one may be checked. Once one
+    # facility is clearly present, recover one additional faint mark from its
+    # localized difference signal. This handles light pencil strokes whose net
+    # ink is cancelled out by small scan/alignment brightness differences.
+    facilities = [score for score in scores if score.name.startswith("facility.")]
+    if facilities and any(score.selected for score in facilities):
+        unselected = [score for score in facilities if not score.selected]
+        if unselected:
+            best = max(unselected, key=lambda score: score.difference_ratio)
+            baseline = min(score.difference_ratio for score in facilities)
+            if (best.difference_ratio >= .070 and best.added_ink_ratio >= -.001
+                    and best.difference_ratio - baseline >= .006):
+                scores = tuple(replace(score, selected=True) if score.name == best.name else score
+                               for score in scores)
     return scores
 
 

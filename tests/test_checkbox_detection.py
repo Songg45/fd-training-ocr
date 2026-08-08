@@ -1,8 +1,9 @@
 import unittest
+from unittest.mock import patch
 
 from PIL import Image, ImageDraw
 
-from fd_training_ocr.checkbox_detection import detect_options
+from fd_training_ocr.checkbox_detection import OptionScore, detect_options
 from fd_training_ocr.template import Region, TemplateDefinition
 
 
@@ -68,6 +69,29 @@ class CheckboxDetectionTests(unittest.TestCase):
         scores = detect_options(master, completed, definition())
         selected = {score.name for score in scores if score.selected}
         self.assertEqual(selected, {"facility.classroom"})
+
+    def test_recovers_second_faint_facility_mark(self) -> None:
+        master, completed = pages(set())
+        multi_definition = TemplateDefinition(
+            "synthetic", "v1", "normalized_xywh", (400, 200), frozenset(), {}, (
+                Region("training_type.driver", "option", (.01, .01, .1, .1), {}),
+                Region("facility.classroom", "option", (.12, .01, .1, .1), {}),
+                Region("facility.drill_ground", "option", (.23, .01, .1, .1), {}),
+                Region("facility.outside_area", "option", (.34, .01, .1, .1), {}),
+                Region("truck.brush54", "option", (.45, .01, .1, .1), {}),
+            ))
+        synthetic = (
+            OptionScore("training_type.driver", 0, 1, .01, 0, False),
+            OptionScore("facility.classroom", 73, 1000, .07336, .00004, False),
+            OptionScore("facility.drill_ground", 65, 1000, .06528, -.00036, False),
+            OptionScore("facility.outside_area", 69, 1000, .06936, .00522, True),
+            OptionScore("truck.brush54", 0, 1, .01, 0, False),
+        )
+        with patch("fd_training_ocr.checkbox_detection.score_option",
+                   side_effect=synthetic):
+            scores = detect_options(master, completed, multi_definition)
+        selected = {score.name for score in scores if score.selected}
+        self.assertEqual(selected, {"facility.classroom", "facility.outside_area"})
 
 
 if __name__ == "__main__":
