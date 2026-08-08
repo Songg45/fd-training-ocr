@@ -10,8 +10,8 @@ import sys
 import tempfile
 
 from .config import load_config
-from .gui_controller import (FACILITY_LABELS, GuiPaths, apply_facilities_edit, apply_gui_edit,
-                             automatic_export, build_processor, effective_facilities,
+from .gui_controller import (EVENT_SELECTIONS, GuiPaths, apply_event_selection, apply_gui_edit,
+                             automatic_export, build_processor, effective_event_selection,
                              export_record, load_gui_state, process_pdf, save_gui_state,
                              discover_pdfs, index_after_removal, structured_rows,
                              roster_table_rows, save_roster_table, unprocessed_sources,
@@ -489,7 +489,7 @@ def main(argv=None) -> int:
             field_name = item.data(QtCore.Qt.ItemDataRole.UserRole)
             if not field_name:
                 return
-            if field_name == "Facilities":
+            if field_name in EVENT_SELECTIONS:
                 return
             try:
                 apply_gui_edit(self.record, str(field_name), item.text())
@@ -503,15 +503,18 @@ def main(argv=None) -> int:
 
         def summary_activated(self, row, column):
             item = self.table.item(row, 1)
-            if self.record is None or item is None or item.data(QtCore.Qt.ItemDataRole.UserRole) != "Facilities":
+            selection_name = (item.data(QtCore.Qt.ItemDataRole.UserRole)
+                              if item is not None else None)
+            if self.record is None or selection_name not in EVENT_SELECTIONS:
                 return
             event = self.record.get("event", {})
-            selected = set(effective_facilities(event) or ())
+            labels, _, _ = EVENT_SELECTIONS[selection_name]
+            selected = set(effective_event_selection(event, selection_name) or ())
             dialog = QtWidgets.QDialog(self)
-            dialog.setWindowTitle("Select Facilities")
+            dialog.setWindowTitle(f"Select {selection_name}")
             layout = QtWidgets.QVBoxLayout(dialog)
             checks = {}
-            for key, label in FACILITY_LABELS.items():
+            for key, label in labels.items():
                 check = QtWidgets.QCheckBox(label)
                 check.setChecked(key in selected)
                 checks[key] = check
@@ -524,12 +527,13 @@ def main(argv=None) -> int:
             if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
                 return
             try:
-                apply_facilities_edit(
-                    self.record, [key for key, check in checks.items() if check.isChecked()])
+                apply_event_selection(
+                    self.record, selection_name,
+                    [key for key, check in checks.items() if check.isChecked()])
                 automatic_export(self.record, args.export_dir)
                 self.persist_state()
                 self.display_record(self.record)
-                self.status.setText("Edited Facilities; automatic export updated")
+                self.status.setText(f"Edited {selection_name}; automatic export updated")
                 self.export_button.setEnabled(True)
             except (OSError, ValueError) as exc:
                 QtWidgets.QMessageBox.critical(self, "Unable to save correction", str(exc))

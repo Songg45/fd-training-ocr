@@ -4,9 +4,11 @@ import tempfile
 import unittest
 
 from fd_training_ocr.config import AppConfig
-from fd_training_ocr.gui_controller import (GuiPaths, apply_facilities_edit, apply_gui_edit,
+from fd_training_ocr.gui_controller import (GuiPaths, apply_event_selection, apply_facilities_edit,
+                                             apply_gui_edit,
                                              automatic_export, automatic_export_stem,
-                                             build_processor, display_value, effective_facilities,
+                                             build_processor, display_value, effective_event_selection,
+                                             effective_facilities,
                                              discover_pdfs, export_record, index_after_removal, structured_rows,
                                              load_gui_state, save_gui_state, unprocessed_sources,
                                              roster_table_rows, save_roster_table,
@@ -60,8 +62,8 @@ class GuiControllerTests(unittest.TestCase):
                                          "trucks_used":["Brush 54"], "total_hours_calculated":1.0,
                                          "second_pass_call_count":1}})
         self.assertEqual(rows[0], ("date", "12/17/25", "check date", True))
-        self.assertIn(("Training type", "New Driver", "", False), rows)
-        self.assertIn(("Truck", "Brush 54", "", False), rows)
+        self.assertIn(("Training type", "New Driver", "Double-click to select training types", False), rows)
+        self.assertIn(("Truck", "Brush 54", "Double-click to select trucks", False), rows)
         self.assertIn(("Facilities", "None selected", "Double-click to select facilities", False), rows)
         self.assertIn(("Calculated duration", "1.0 hour", "", False), rows)
         self.assertIn(("Stage 3 resolution", "1 call; 1 field resolved; 0 unresolved", "", False), rows)
@@ -93,6 +95,19 @@ class GuiControllerTests(unittest.TestCase):
         self.assertEqual(record["event"]["reviewed_facilities"], ["classroom", "outside_area"])
         self.assertEqual(effective_facilities(record["event"]), ["classroom", "outside_area"])
         self.assertTrue(record["review"]["corrections_applied"])
+
+    def test_training_type_and_truck_edits_preserve_machine_results(self):
+        record = {"event":{"training_types":[], "trucks_used":["Engine 54"]},
+                  "review":{"corrections_applied":False, "reviewed_at":None}}
+        apply_event_selection(record, "Training type", ["new_driver", "driver"],
+                              "2026-08-08T12:00:00Z")
+        apply_event_selection(record, "Truck", ["Brush 54"],
+                              "2026-08-08T12:01:00Z")
+        self.assertEqual(record["event"]["training_types"], [])
+        self.assertEqual(record["event"]["trucks_used"], ["Engine 54"])
+        self.assertEqual(effective_event_selection(record["event"], "Training type"),
+                         ["new_driver", "driver"])
+        self.assertEqual(effective_event_selection(record["event"], "Truck"), ["Brush 54"])
 
     def test_export_writes_exact_json_record(self):
         record = {"status":"review_required", "warnings":["check"]}

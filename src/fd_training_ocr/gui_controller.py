@@ -93,10 +93,45 @@ FACILITY_LABELS = {
     "outside_area": "Outside Area",
 }
 
+TRAINING_TYPE_LABELS = {
+    "facilities": "Facilities",
+    "company": "Company",
+    "officers": "Officers",
+    "driver": "Driver",
+    "haz_mat": "Haz-mat",
+    "new_driver": "New Driver",
+    "recruit": "Recruit",
+}
+
+TRUCK_LABELS = {name: name for name in (
+    "Engine 54", "Tanker 54", "Brush 54", "Engine 254", "Tanker 854", "Brush 254")}
+
+EVENT_SELECTIONS = {
+    "Training type": (TRAINING_TYPE_LABELS, "training_types", "reviewed_training_types"),
+    "Truck": (TRUCK_LABELS, "trucks_used", "reviewed_trucks_used"),
+    "Facilities": (FACILITY_LABELS, "facilities", "reviewed_facilities"),
+}
+
 
 def effective_facilities(event: Mapping[str, Any]) -> Any:
     reviewed = event.get("reviewed_facilities")
     return reviewed if reviewed is not None else event.get("facilities")
+
+
+def effective_event_selection(event: Mapping[str, Any], selection_name: str) -> Any:
+    if selection_name not in EVENT_SELECTIONS:
+        raise ValueError(f"unknown event selection: {selection_name}")
+    _, machine_key, reviewed_key = EVENT_SELECTIONS[selection_name]
+    reviewed = event.get(reviewed_key)
+    return reviewed if reviewed is not None else event.get(machine_key)
+
+
+def _event_labels(event: Mapping[str, Any], selection_name: str) -> str:
+    labels, _, _ = EVENT_SELECTIONS[selection_name]
+    values = effective_event_selection(event, selection_name)
+    if not values:
+        return "None selected"
+    return ", ".join(labels.get(value, str(value)) for value in values)
 
 
 def structured_rows(record: Mapping[str, Any]) -> tuple[tuple[str, str, str, bool], ...]:
@@ -112,9 +147,11 @@ def structured_rows(record: Mapping[str, Any]) -> tuple[tuple[str, str, str, boo
     event = record.get("event", {})
     calculated = event.get("total_hours_calculated")
     rows.extend((
-        ("Training type", _labels(event.get("training_types")), "", False),
-        ("Truck", _labels(event.get("trucks_used")), "", False),
-        ("Facilities", _labels(effective_facilities(event)),
+        ("Training type", _event_labels(event, "Training type"),
+         "Double-click to select training types", False),
+        ("Truck", _event_labels(event, "Truck"),
+         "Double-click to select trucks", False),
+        ("Facilities", _event_labels(event, "Facilities"),
          "Double-click to select facilities", False),
         ("Calculated duration", "" if calculated is None else _counted(calculated, "hour"), "", False),
     ))
@@ -148,13 +185,23 @@ def apply_gui_edit(record: MutableMapping[str, Any], field_name: str, value: str
 def apply_facilities_edit(record: MutableMapping[str, Any], facilities: list[str],
                           reviewed_at: str | None = None) -> None:
     """Store reviewed facilities separately from the detector's machine result."""
-    invalid = [value for value in facilities if value not in FACILITY_LABELS]
+    apply_event_selection(record, "Facilities", facilities, reviewed_at)
+
+
+def apply_event_selection(record: MutableMapping[str, Any], selection_name: str,
+                          values: list[str], reviewed_at: str | None = None) -> None:
+    """Store a reviewed event selection separately from machine detections."""
+    if selection_name not in EVENT_SELECTIONS:
+        raise ValueError(f"unknown event selection: {selection_name}")
+    labels, _, reviewed_key = EVENT_SELECTIONS[selection_name]
+    invalid = [value for value in values if value not in labels]
     if invalid:
-        raise ValueError(f"unknown facilities selection: {', '.join(invalid)}")
+        raise ValueError(f"unknown {selection_name.lower()} selection: {', '.join(invalid)}")
     stamp = reviewed_at or datetime.now(timezone.utc).isoformat()
     event = record.setdefault("event", {})
-    event["reviewed_facilities"] = list(dict.fromkeys(facilities))
-    event["facilities_review"] = {"status": "corrected", "reviewed_at": stamp}
+    event[reviewed_key] = list(dict.fromkeys(values))
+    event[reviewed_key.removeprefix("reviewed_") + "_review"] = {
+        "status": "corrected", "reviewed_at": stamp}
     review = record.setdefault("review", {})
     review["corrections_applied"] = True
     review["reviewed_at"] = stamp
