@@ -276,6 +276,32 @@ def verify_second_pass(page: Image.Image, template: TemplateDefinition,
         resolutions[print_name] = _resolve(print_name, name1, name2, values["print_name"],
                                            name_candidate, attempt, supports=supports)
 
+        # Stage 3 may recover the one exact roster key that the earlier passes
+        # missed. Reconcile the pair again so a definitive ID (or a definitive
+        # single-ID name) wins over an unrecognized companion value.
+        unit_value = resolutions[unit_name].resolved_value or values["unit_id"]
+        name_value = resolutions[print_name].resolved_value or values["print_name"]
+        unit_member = roster.member_for_unit(unit_value) if roster and unit_value else None
+        name_member = roster.member_for_name(name_value) if roster and name_value else None
+        matched_member = None
+        matched_reason = None
+        if unit_member and (name_member is None or name_member == unit_member):
+            matched_member = unit_member
+            matched_reason = "exact Stage 3 roster unit ID resolved attendee pair"
+        elif name_member and unit_member is None and len(name_member.unit_ids) == 1:
+            matched_member = name_member
+            matched_reason = "exact Stage 3 roster name or alias resolved attendee pair"
+        if matched_member is not None:
+            roster_unit = next((unit for unit in matched_member.unit_ids
+                                if unit_value and unit.casefold() == unit_value.strip().casefold()),
+                               matched_member.unit_ids[0])
+            resolutions[unit_name] = FieldResolution(
+                unit_name, unit1, unit2, values["unit_id"], roster_unit, roster_unit,
+                matched_reason, False, attempt)
+            resolutions[print_name] = FieldResolution(
+                print_name, name1, name2, values["print_name"], matched_member.name,
+                matched_member.name, matched_reason, False, attempt)
+
     grouped = set(time_names) | {"instructor"} | {
         name for name in first if name.startswith("attendee.")}
     for name, item in first.items():

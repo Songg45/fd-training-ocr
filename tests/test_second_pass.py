@@ -82,6 +82,22 @@ class SecondPassTests(unittest.TestCase):
                          "Nick Sledge")
         self.assertIn("name or alias", unit.resolution_reason)
 
+    def test_stage3_exact_unit_id_resolves_bad_name_from_roster(self):
+        roster = Roster((RosterMember("Diane Brown", ("6854",), ()),))
+        first = (result("attendee.01.unit_id", "G854"),
+                 result("attendee.01.print_name", "Vigne Starnos"))
+        report = validate(first, roster=roster)
+        provider = MockRecognitionProvider(context_responses={"attendee.01": {
+            "unit_id": "6854", "print_name": "Vigne Starnos",
+            "handwriting_supports_candidate": False,
+            "alternatives": {"unit_id": [], "print_name": []}}})
+        verified = verify_second_pass(Image.new("L", (1000, 1000), 255), template(), provider,
+                                      first, report, roster)
+        self.assertEqual(verified.resolutions["attendee.01.unit_id"].resolved_value, "6854")
+        name = verified.resolutions["attendee.01.print_name"]
+        self.assertEqual(name.resolved_value, "Diane Brown")
+        self.assertIn("Stage 3 roster unit ID", name.resolution_reason)
+
     def test_only_disagreeing_generic_field_triggers_stage3(self):
         first = (result("date", "12/17/25", stage2="12/11/25"),
                  result("description", "Synthetic drill"))
