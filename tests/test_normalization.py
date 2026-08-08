@@ -8,6 +8,7 @@ class NormalizationTests(unittest.TestCase):
     def test_preserves_written_date_and_normalizes(self):
         value = normalize_date("12/17/25")
         self.assertEqual((value.raw, value.normalized, value.valid), ("12/17/25", "2025-12-17", True))
+        self.assertEqual(normalize_date("12-17-25").normalized, "2025-12-17")
 
     def test_invalid_date_is_not_rewritten(self):
         value = normalize_date("LZ//WOES")

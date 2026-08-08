@@ -15,7 +15,7 @@ from .pdf_render import render_pdf
 from .recognition import RecognitionProvider, recognize_fields
 from .review import mask_signature_column
 from .second_pass import verify_second_pass
-from .table_extraction import detect_populated_rows
+from .table_extraction import contiguous_populated_rows, detect_populated_rows
 from .template import load_template
 from .validation import RosterError, ValidationPolicy, load_roster, validate
 
@@ -60,7 +60,7 @@ def processor_factory(*, work_dir: Path, master_path: Path, template_path: Path,
         option_scores = detect_options(master, page, definition)
         selected = [x.name for x in option_scores if x.selected]
         row_scores = detect_populated_rows(master, page, definition)
-        populated = [x.row for x in row_scores if x.populated]
+        populated = list(contiguous_populated_rows(row_scores))
         recognized = recognize_fields(page, master, definition, provider, populated,
             crop_padding=recognition_crop_padding, max_attempts=recognition_max_attempts)
         apparatus_map = {"truck.engine54":"Engine 54", "truck.tanker54":"Tanker 54", "truck.engine254":"Engine 254", "truck.brush54":"Brush 54", "truck.tanker854":"Tanker 854"}

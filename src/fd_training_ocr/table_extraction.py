@@ -30,7 +30,7 @@ class RowScore:
 def detect_populated_rows(master: Image.Image, completed: Image.Image,
                           template: TemplateDefinition, threshold: float = 0.030,
                           difference_threshold: float = 0.060,
-                          fallback_added_ink_floor: float = 0.005
+                          fallback_added_ink_floor: float = 0.002
                           ) -> tuple[RowScore, ...]:
     """Score rows using only unit ID and print-name cells; signatures are ignored."""
     if master.size != completed.size:
@@ -62,6 +62,16 @@ def detect_populated_rows(master: Image.Image, completed: Image.Image,
                                 or (max_difference >= difference_threshold
                                     and max_added >= fallback_added_ink_floor)))
     return tuple(results)
+
+
+def contiguous_populated_rows(scores: tuple[RowScore, ...]) -> tuple[int, ...]:
+    """Accept only the top-down contiguous attendee block used by the form."""
+    populated = []
+    for score in sorted(scores, key=lambda item: item.row):
+        if score.row != len(populated) + 1 or not score.populated:
+            break
+        populated.append(score.row)
+    return tuple(populated)
 
 
 def suppress_printed_rules(master_crop: Image.Image, completed_crop: Image.Image,

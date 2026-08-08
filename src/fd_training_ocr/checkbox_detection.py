@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -61,8 +61,20 @@ def detect_options(master: Image.Image, completed: Image.Image,
                    ) -> tuple[OptionScore, ...]:
     if master.size != completed.size:
         raise ValueError("master and completed pages must have identical dimensions")
-    return tuple(score_option(master, completed, region, threshold)
-                 for region in template.regions if region.kind == "option")
+    scores = tuple(score_option(master, completed, region, threshold)
+                   for region in template.regions if region.kind == "option")
+    for prefix in ("training_type.", "facility."):
+        group = [score for score in scores if score.name.startswith(prefix)]
+        if not group or any(score.selected for score in group):
+            continue
+        ranked = sorted(group, key=lambda score: score.added_ink_ratio, reverse=True)
+        best = ranked[0]
+        runner_up = ranked[1].added_ink_ratio if len(ranked) > 1 else float("-inf")
+        if (best.difference_ratio >= .060 and best.added_ink_ratio >= .002
+                and best.added_ink_ratio - runner_up >= .003):
+            scores = tuple(replace(score, selected=True) if score.name == best.name else score
+                           for score in scores)
+    return scores
 
 
 def draw_option_diagnostics(completed: Image.Image, template: TemplateDefinition,

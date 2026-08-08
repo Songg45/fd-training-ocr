@@ -58,6 +58,17 @@ class CheckboxDetectionTests(unittest.TestCase):
                      if score.name == "truck.brush54")
         self.assertFalse(truck.selected)
 
+    def test_clear_faint_group_winner_is_selected(self) -> None:
+        master, completed = pages(set())
+        region = definition().region("facility.classroom")
+        box = region.pixel_box(*master.size)
+        draw = ImageDraw.Draw(completed)
+        draw.rectangle(box, fill=255)
+        draw.rectangle((box[0] + 8, box[1] + 8, box[0] + 47, box[1] + 17), fill=0)
+        scores = detect_options(master, completed, definition())
+        selected = {score.name for score in scores if score.selected}
+        self.assertEqual(selected, {"facility.classroom"})
+
 
 if __name__ == "__main__":
     unittest.main()

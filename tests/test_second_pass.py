@@ -143,6 +143,40 @@ class SecondPassTests(unittest.TestCase):
         self.assertEqual(verified.resolutions["description"].resolution_reason,
                          "stages 1 and 2 agree after normalized deterministic validation")
 
+    def test_complete_valid_stage3_date_replaces_incomplete_earlier_dates(self):
+        first = (result("date", "03/12", stage2="03/12"),)
+        report = validate(first)
+        provider = MockRecognitionProvider(context_responses={"date": {
+            "value": "03/12/26", "alternatives": {"value": []}}})
+        verified = verify_second_pass(Image.new("L", (1000, 1000), 255), template(),
+                                      provider, first, report)
+        date = verified.resolutions["date"]
+        self.assertEqual(date.resolved_value, "03/12/26")
+        self.assertFalse(date.review_required)
+
+    def test_stage2_and_hyphenated_stage3_dates_compare_by_calendar_value(self):
+        first = (result("date", "11/25", stage2="11/25/25"),)
+        report = validate(first)
+        provider = MockRecognitionProvider(context_responses={"date": {
+            "value": "11-25-25", "alternatives": {"value": []}}})
+        verified = verify_second_pass(Image.new("L", (1000, 1000), 255), template(),
+                                      provider, first, report)
+        date = verified.resolutions["date"]
+        self.assertEqual(date.resolved_value, "11-25-25")
+        self.assertFalse(date.review_required)
+
+    def test_matching_month_day_passes_combine_with_stage3_year(self):
+        first = (result("date", "03/12", stage2="3/12"),)
+        report = validate(first)
+        provider = MockRecognitionProvider(context_responses={"date": {
+            "value": "26", "alternatives": {"value": []}}})
+        verified = verify_second_pass(Image.new("L", (1000, 1000), 255), template(),
+                                      provider, first, report)
+        date = verified.resolutions["date"]
+        self.assertEqual(date.resolved_value, "03/12/26")
+        self.assertFalse(date.review_required)
+        self.assertIn("combined", date.resolution_reason)
+
     def test_clean_fields_do_not_trigger_context_calls(self):
         first = (result("start_time", "16:00"), result("end_time", "17:00"),
                  result("total_hours", "1"), result("instructor", "Synthetic Instructor"))

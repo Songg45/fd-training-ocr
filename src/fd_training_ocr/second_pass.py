@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime
+import re
 from typing import Mapping, Sequence
 
 from PIL import Image
 
-from .normalization import normalize_hours, normalize_time
+from .normalization import normalize_date, normalize_hours, normalize_time
 from .recognition import (ContextVerificationRequest, ContextVerificationResult,
                           RecognitionError, RecognitionProvider, RecognitionResult)
 from .template import Region, TemplateDefinition
@@ -115,11 +116,30 @@ def _candidate_for(field: str, assessment: FieldAssessment | None, roster: Roste
 
 
 def _comparison(field: str, value: str | None) -> str | None:
+    if field == "date":
+        item = normalize_date(value); return item.normalized if item.valid else None
     if field in {"start_time", "end_time"}:
         item = normalize_time(value); return item.normalized if item.valid else None
     if field == "total_hours":
         item = normalize_hours(value); return item.normalized if item.valid else None
     return value.strip().casefold() if value and value.strip() else None
+
+
+def _month_day(value: str | None) -> tuple[int, int] | None:
+    match = re.fullmatch(r"\s*(\d{1,2})[/-](\d{1,2})\s*", value or "")
+    if match is None:
+        return None
+    month, day = int(match.group(1)), int(match.group(2))
+    try:
+        datetime(2000, month, day)
+    except ValueError:
+        return None
+    return month, day
+
+
+def _year(value: str | None) -> str | None:
+    match = re.fullmatch(r"\s*(\d{2}|\d{4})\s*", value or "")
+    return match.group(1) if match else None
 
 
 def _stage_pair(result: RecognitionResult) -> tuple[str | None, str | None]:
@@ -134,11 +154,16 @@ def _resolve(field: str, first: str | None, independent: str | None,
              deterministic: bool = False) -> FieldResolution:
     clean_first = first.strip() if first else None
     clean_second = second.strip() if second else None
-    if clean_first and clean_second and _comparison(field, clean_first) == _comparison(field, clean_second):
+    first_comparison = _comparison(field, clean_first)
+    second_comparison = _comparison(field, clean_second)
+    if (clean_first and clean_second and first_comparison is not None
+            and first_comparison == second_comparison):
         return FieldResolution(field, first, independent, second, candidate, clean_second,
                                "first pass and contextual pass agree", False, attempts)
     clean_independent = independent.strip() if independent else None
-    if clean_independent and clean_second and _comparison(field, clean_independent) == _comparison(field, clean_second):
+    independent_comparison = _comparison(field, clean_independent)
+    if (clean_independent and clean_second and independent_comparison is not None
+            and independent_comparison == second_comparison):
         return FieldResolution(field, first, independent, second, candidate, clean_second,
                                "independent pass and contextual pass agree", False, attempts)
     if clean_second and candidate and supports and clean_second.casefold() == candidate.casefold():
@@ -147,6 +172,20 @@ def _resolve(field: str, first: str | None, independent: str | None,
     if clean_second and deterministic:
         return FieldResolution(field, first, independent, second, candidate, clean_second,
                                "contextual pass and deterministic cross-field validation agree", False, attempts)
+    if field == "date" and clean_second:
+        stage3_date = normalize_date(clean_second)
+        first_date, independent_date = normalize_date(clean_first), normalize_date(clean_independent)
+        if stage3_date.valid and not first_date.valid and not independent_date.valid:
+            return FieldResolution(field, first, independent, second, candidate, clean_second,
+                                   "complete valid Stage 3 date replaced incomplete earlier readings",
+                                   False, attempts)
+        first_md, independent_md, stage3_year = (
+            _month_day(clean_first), _month_day(clean_independent), _year(clean_second))
+        if first_md and first_md == independent_md and stage3_year:
+            combined = f"{first_md[0]:02d}/{first_md[1]:02d}/{stage3_year}"
+            if normalize_date(combined).valid:
+                return FieldResolution(field, first, independent, second, candidate, combined,
+                    "matching month/day readings combined with Stage 3 year", False, attempts)
     return FieldResolution(field, first, independent, second, candidate, None, None, True, attempts)
 
 
@@ -331,7 +370,10 @@ def verify_second_pass(page: Image.Image, template: TemplateDefinition,
         assessment = assessments[name]
         if not _requires_stage3(name, item, assessment, validation.warnings): continue
         stage1, stage2 = _stage_pair(item)
-        prompt = (f"Independently verify the handwritten value in the labeled {name.replace('_', ' ')} field. "
+        date_instruction = (" Return the complete date in MM/DD/YY format; never return only a month/day "
+                            "or only a year." if name == "date" else "")
+        prompt = (f"Independently verify the handwritten value in the labeled {name.replace('_', ' ')} field."
+                  f"{date_instruction} "
                   f"Stage 1/2 evidence is {(stage1, stage2)!r}; use the larger labeled image to adjudicate it. "
                   'Return the same shape as this exact example, with a scalar quoted value: '
                   '{"value":"12/17/25","alternatives":{"value":[]}}.')

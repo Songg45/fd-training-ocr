@@ -4,7 +4,8 @@ from unittest.mock import patch
 import numpy as np
 from PIL import Image, ImageDraw
 
-from fd_training_ocr.table_extraction import detect_populated_rows, suppress_printed_rules
+from fd_training_ocr.table_extraction import (CellScore, RowScore, contiguous_populated_rows,
+                                              detect_populated_rows, suppress_printed_rules)
 from fd_training_ocr.template import Region, TemplateDefinition
 
 
@@ -70,6 +71,21 @@ class TableExtractionTests(unittest.TestCase):
                    side_effect=lambda a, b: np.ones((a.height, a.width), dtype=bool)):
             scores = detect_populated_rows(master, completed, definition())
         self.assertFalse(any(score.populated for score in scores))
+
+    def test_isolated_lower_row_false_positives_are_not_selected(self) -> None:
+        def row(number: int, populated: bool) -> RowScore:
+            unit = CellScore(f"attendee.{number:02d}.unit_id", 0.1, 0.01)
+            name = CellScore(f"attendee.{number:02d}.print_name", 0.1, 0.01)
+            return RowScore(number, unit, name, populated)
+        scores = tuple(row(number, number in {1, 2, 16, 18}) for number in range(1, 20))
+        self.assertEqual(contiguous_populated_rows(scores), (1, 2))
+
+    def test_no_lower_rows_selected_when_first_row_is_blank(self) -> None:
+        def row(number: int, populated: bool) -> RowScore:
+            cell = CellScore(f"attendee.{number:02d}.unit_id", 0.1, 0.01)
+            return RowScore(number, cell, cell, populated)
+        scores = tuple(row(number, number in {16, 18}) for number in range(1, 20))
+        self.assertEqual(contiguous_populated_rows(scores), ())
 
 
 if __name__ == "__main__":
