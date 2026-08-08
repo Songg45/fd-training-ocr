@@ -131,7 +131,7 @@ def _existing_hashes(records_dir: Path) -> set[str]:
 
 def _field_value(record: FormRecord, name: str) -> Any:
     item = record.fields.get(name, {})
-    for key in ("reviewed_value", "normalized", "raw"):
+    for key in ("reviewed_value", "resolved_value", "normalized", "raw"):
         if item.get(key) is not None: return item[key]
     return None
 

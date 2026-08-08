@@ -59,6 +59,32 @@ class RecognitionProvider(Protocol):
 
     def recognize(self, request: RecognitionRequest) -> RecognitionResult: ...
 
+    def verify_context(self, request: "ContextVerificationRequest") -> "ContextVerificationResult": ...
+
+
+@dataclass(frozen=True)
+class ContextVerificationRequest:
+    verification_id: str
+    prompt: str
+    image: Image.Image
+    source_region: tuple[int, int, int, int]
+    schema: str
+    attempt: int = 1
+
+
+@dataclass(frozen=True)
+class ContextVerificationResult:
+    verification_id: str
+    values: Mapping[str, str | None]
+    alternatives: Mapping[str, tuple[str, ...]]
+    internally_consistent: bool | None
+    handwriting_supports_candidate: bool | None
+    raw_output: str
+    provider: str
+    model: str
+    source_region: tuple[int, int, int, int]
+    attempt: int = 1
+
 
 _PROMPTS = {
     "date": "Transcribe only the handwritten date. Expected format: MM/DD/YY (or MM/DD/YYYY). Do not read the printed Date label.",
@@ -186,9 +212,12 @@ class MockRecognitionProvider:
     name = "mock"
     model = "deterministic-fixture-v1"
 
-    def __init__(self, responses: Mapping[str, Mapping[str, object]] | None = None):
+    def __init__(self, responses: Mapping[str, Mapping[str, object]] | None = None,
+                 context_responses: Mapping[str, Mapping[str, object]] | None = None):
         self.responses = responses or {}
+        self.context_responses = context_responses or {}
         self.requests: list[RecognitionRequest] = []
+        self.context_requests: list[ContextVerificationRequest] = []
 
     def recognize(self, request: RecognitionRequest) -> RecognitionResult:
         self.requests.append(request)
@@ -196,6 +225,22 @@ class MockRecognitionProvider:
                                       {"value": None, "confidence": 0.0, "alternatives": []})
         raw = json.dumps(response, sort_keys=True, separators=(",", ":"))
         return parse_response(raw, request, self.name, self.model)
+
+    def verify_context(self, request: ContextVerificationRequest) -> ContextVerificationResult:
+        self.context_requests.append(request)
+        defaults = {
+            "time_group": {"start_time": None, "end_time": None, "total_hours": None,
+                           "internally_consistent": False,
+                           "alternatives": {"start_time": [], "end_time": [], "total_hours": []}},
+            "instructor": {"instructor": None, "handwriting_supports_candidate": False,
+                           "alternatives": {"instructor": []}},
+            "attendee_row": {"unit_id": None, "print_name": None,
+                             "handwriting_supports_candidate": False,
+                             "alternatives": {"unit_id": [], "print_name": []}},
+        }
+        raw = json.dumps(self.context_responses.get(request.verification_id, defaults[request.schema]),
+                         sort_keys=True, separators=(",", ":"))
+        return parse_context_response(raw, request, self.name, self.model)
 
 
 Transport = Callable[[str, bytes, float], bytes]
@@ -222,10 +267,14 @@ class OllamaVisionProvider:
         self._transport = transport
 
     def recognize(self, request: RecognitionRequest) -> RecognitionResult:
+        raw = self._chat(request.prompt, request.image)
+        return parse_response(raw, request, self.name, self.model)
+
+    def _chat(self, prompt: str, image: Image.Image) -> str:
         buffer = BytesIO()
-        request.image.save(buffer, format="PNG")
+        image.save(buffer, format="PNG")
         body = json.dumps({"model": self.model, "stream": False, "format": "json",
-                           "messages": [{"role": "user", "content": request.prompt,
+                           "messages": [{"role": "user", "content": prompt,
                                          "images": [base64.b64encode(buffer.getvalue()).decode("ascii")]}],
                            "options": {"temperature": 0}}).encode("utf-8")
         try:
@@ -238,7 +287,51 @@ class OllamaVisionProvider:
             raise RecognitionError("Ollama returned an invalid chat envelope") from exc
         if not isinstance(raw, str):
             raise RecognitionError("Ollama message content was not text")
-        return parse_response(raw, request, self.name, self.model)
+        return raw
+
+    def verify_context(self, request: ContextVerificationRequest) -> ContextVerificationResult:
+        return parse_context_response(self._chat(request.prompt, request.image), request,
+                                      self.name, self.model)
+
+
+def parse_context_response(raw: str, request: ContextVerificationRequest,
+                           provider: str, model: str) -> ContextVerificationResult:
+    """Parse one of the deliberately small, strict Pass-2 schemas."""
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RecognitionError(f"context verifier returned malformed JSON: {exc.msg}") from exc
+    if not isinstance(data, dict):
+        raise RecognitionError("context verifier response must be an object")
+    schemas = {
+        "time_group": ({"start_time", "end_time", "total_hours", "internally_consistent", "alternatives"},
+                       ("start_time", "end_time", "total_hours")),
+        "instructor": ({"instructor", "handwriting_supports_candidate", "alternatives"}, ("instructor",)),
+        "attendee_row": ({"unit_id", "print_name", "handwriting_supports_candidate", "alternatives"},
+                         ("unit_id", "print_name")),
+    }
+    if request.schema not in schemas:
+        raise RecognitionError("unknown context verification schema")
+    keys, value_keys = schemas[request.schema]
+    if set(data) != keys:
+        raise RecognitionError(f"{request.schema} response has unexpected keys")
+    values = {key: data[key] for key in value_keys}
+    if not all(value is None or isinstance(value, str) for value in values.values()):
+        raise RecognitionError("context values must be strings or null")
+    alternatives = data["alternatives"]
+    if not isinstance(alternatives, dict) or set(alternatives) != set(value_keys) or not all(
+            isinstance(items, list) and all(isinstance(item, str) for item in items)
+            for items in alternatives.values()):
+        raise RecognitionError("context alternatives must map every value field to a string array")
+    consistent = data.get("internally_consistent")
+    supports = data.get("handwriting_supports_candidate")
+    if request.schema == "time_group" and not isinstance(consistent, bool):
+        raise RecognitionError("internally_consistent must be boolean")
+    if request.schema != "time_group" and not isinstance(supports, bool):
+        raise RecognitionError("handwriting_supports_candidate must be boolean")
+    return ContextVerificationResult(request.verification_id, values,
+        {key: tuple(items) for key, items in alternatives.items()}, consistent, supports,
+        raw, provider, model, request.source_region, request.attempt)
 
 
 def recognize_fields(page: Image.Image, master: Image.Image,

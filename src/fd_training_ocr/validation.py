@@ -115,7 +115,7 @@ def _normalize(result: RecognitionResult, roster: Roster | None, policy: Validat
     if result.field_name in {"start_time", "end_time"}: return normalize_time(value)
     if result.field_name == "total_hours": return normalize_hours(value)
     if result.field_name == "location": return normalize_allowlisted(value, policy.locations)
-    if result.field_name.endswith(".print_name") and value and roster:
+    if (result.field_name.endswith(".print_name") or result.field_name == "instructor") and value and roster:
         match, _ = roster.match_name(value)
         return NormalizedValue(value, value.strip(), match is not None, None if match else "name not found uniquely in roster")
     if result.field_name.endswith(".unit_id") and value and roster:
@@ -133,7 +133,7 @@ def validate(results: Iterable[RecognitionResult], *, roster: Roster | None = No
         if result.confidence < threshold: warnings.append(f"confidence {result.confidence:.2f} is below {threshold:.2f}")
         if result.alternatives: warnings.append("recognizer supplied alternatives")
         suggestion, ambiguous, reason = None, False, None
-        if roster and result.value and result.field_name.endswith(".print_name"):
+        if roster and result.value and (result.field_name.endswith(".print_name") or result.field_name == "instructor"):
             exact, _ = roster.match_name(result.value)
             suggestion, ambiguous, reason = ((exact, False, "exact roster name or alias") if exact
                                                else roster.suggest_name(result.value))

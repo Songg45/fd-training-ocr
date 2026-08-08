@@ -14,6 +14,7 @@ from .export import FormRecord
 from .pdf_render import render_pdf
 from .recognition import RecognitionProvider, recognize_fields
 from .review import mask_signature_column
+from .second_pass import verify_second_pass
 from .table_extraction import detect_populated_rows
 from .template import load_template
 from .validation import RosterError, ValidationPolicy, load_roster, validate
@@ -63,6 +64,7 @@ def processor_factory(*, work_dir: Path, master_path: Path, template_path: Path,
         apparatus_map = {"truck.engine54":"Engine 54", "truck.tanker54":"Tanker 54", "truck.engine254":"Engine 254", "truck.brush54":"Brush 54", "truck.tanker854":"Tanker 854"}
         apparatus = [apparatus_map[x] for x in selected if x in apparatus_map]
         report = validate(recognized, roster=roster, selected_apparatus=apparatus, policy=policy)
+        second_pass = verify_second_pass(page, definition, provider, recognized, report, roster)
         fields = {}
         by_assessment = {x.field_name: x for x in report.fields}
         for item in recognized:
@@ -75,17 +77,39 @@ def processor_factory(*, work_dir: Path, master_path: Path, template_path: Path,
                 "suggestion_ambiguous": assessment.suggestion_ambiguous,
                 "suggestion_reason": assessment.suggestion_reason,
                 "warnings": list(assessment.warnings), "review": {"status": "unreviewed", "reviewed_at": None}}
+            resolution = second_pass.resolutions.get(item.field_name)
+            fields[item.field_name].update({
+                "first_pass": item.value,
+                "second_pass": resolution.second_pass if resolution else None,
+                "second_pass_attempts": list(resolution.attempts) if resolution else [],
+                "resolved_value": resolution.resolved_value if resolution else None,
+                "resolution_reason": resolution.resolution_reason if resolution else None,
+                "second_pass_review_required": resolution.review_required if resolution else False,
+            })
+            if resolution and not resolution.review_required:
+                fields[item.field_name]["review"] = {"status": "auto_resolved", "reviewed_at": None}
         attendees = []
         for row in populated:
             prefix = f"attendee.{row:02d}"
             attendees.append({"row": row, "unit_id": fields.get(prefix + ".unit_id", {}).get("normalized"), "print_name": fields.get(prefix + ".print_name", {}).get("normalized")})
         warnings = list(report.warnings)
         if roster_warning: warnings.append(roster_warning)
-        review_required = report.review_required or bool(roster_warning)
+        unresolved_second_pass = any(item.review_required for item in second_pass.resolutions.values())
+        # A resolved Pass-2 field clears only that field's warnings. Global contradictions
+        # remain review-required unless the complete time group validates deterministically.
+        unresolved_first_pass = any(a.review_required and
+            (a.field_name not in second_pass.resolutions or second_pass.resolutions[a.field_name].review_required)
+            for a in report.fields)
+        unresolved_globals = bool(report.warnings)
+        if all(name in second_pass.resolutions and not second_pass.resolutions[name].review_required
+               for name in ("start_time", "end_time", "total_hours")):
+            unresolved_globals = any("duration" not in warning and "time" not in warning
+                                     for warning in report.warnings)
+        review_required = unresolved_first_pass or unresolved_second_pass or unresolved_globals or bool(roster_warning)
         event = {"total_hours_calculated": report.total_hours_calculated,
             "training_types": [x.removeprefix("training_type.") for x in selected if x.startswith("training_type.")],
             "facilities": [x.removeprefix("facility.") for x in selected if x.startswith("facility.")],
-            "trucks_used": apparatus}
+            "trucks_used": apparatus, "second_pass_call_count": second_pass.call_count}
         return FormRecord(path.name, digest, 1, definition.form_type, definition.form_version,
             "review_required" if review_required else "succeeded", fields, event, tuple(attendees), tuple(warnings),
             {"status": "pending" if review_required else "not_required", "corrections_applied": False, "reviewed_at": None})
