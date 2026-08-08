@@ -44,6 +44,13 @@ def validate_pdfs(paths: list[Path] | tuple[Path, ...]) -> tuple[Path, ...]:
     return tuple(result)
 
 
+def index_after_removal(removed_index: int, remaining_count: int) -> int:
+    """Choose the nearest valid queue index after removing the current PDF."""
+    if remaining_count <= 0:
+        return -1
+    return min(removed_index, remaining_count - 1)
+
+
 def display_value(field: Mapping[str, Any]) -> Any:
     for key in ("reviewed_value", "resolved_value", "normalized", "raw"):
         if field.get(key) is not None:

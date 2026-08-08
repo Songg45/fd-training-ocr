@@ -12,7 +12,7 @@ import tempfile
 from .config import load_config
 from .gui_controller import (FACILITY_LABELS, GuiPaths, apply_facilities_edit, apply_gui_edit,
                              build_processor, effective_facilities, export_record, process_pdf,
-                             structured_rows, validate_pdfs)
+                             index_after_removal, structured_rows, validate_pdfs)
 from .pdf_render import render_pdf
 
 
@@ -85,16 +85,18 @@ def main(argv=None) -> int:
             layout = QtWidgets.QVBoxLayout(central)
             controls = QtWidgets.QHBoxLayout(); layout.addLayout(controls)
             self.load_button = QtWidgets.QPushButton("Add PDFs")
+            self.remove_button = QtWidgets.QPushButton("Remove PDF")
             self.previous_button = QtWidgets.QPushButton("Previous")
             self.next_button = QtWidgets.QPushButton("Next")
             self.page_label = QtWidgets.QLabel("0 of 0")
             self.process_button = QtWidgets.QPushButton("Process")
             self.export_button = QtWidgets.QPushButton("Export Results")
+            self.remove_button.setEnabled(False)
             self.previous_button.setEnabled(False); self.next_button.setEnabled(False)
             self.process_button.setEnabled(False); self.export_button.setEnabled(False)
             self.progress = QtWidgets.QProgressBar(); self.progress.setRange(0, 1); self.progress.setValue(0)
             self.status = QtWidgets.QLabel("Load a PDF to begin")
-            for widget in (self.load_button, self.previous_button, self.page_label,
+            for widget in (self.load_button, self.remove_button, self.previous_button, self.page_label,
                            self.next_button, self.process_button, self.export_button,
                            self.progress, self.status): controls.addWidget(widget)
             self.warning = QtWidgets.QLabel("")
@@ -114,6 +116,7 @@ def main(argv=None) -> int:
             self.raw = QtWidgets.QPlainTextEdit(); self.raw.setReadOnly(True)
             tabs.addTab(self.raw, "Raw JSON")
             self.load_button.clicked.connect(self.load_pdfs)
+            self.remove_button.clicked.connect(self.remove_current_pdf)
             self.previous_button.clicked.connect(lambda: self.navigate(-1))
             self.next_button.clicked.connect(lambda: self.navigate(1))
             self.process_button.clicked.connect(self.process)
@@ -147,6 +150,26 @@ def main(argv=None) -> int:
                 except Exception as exc:
                     QtWidgets.QMessageBox.critical(self, "Unable to load PDF", str(exc))
 
+        def remove_current_pdf(self):
+            if self.busy or not (0 <= self.current_index < len(self.sources)):
+                return
+            source = self.sources.pop(self.current_index)
+            self.records.pop(source, None)
+            self.preview_paths.pop(source, None)
+            self.current_index = index_after_removal(self.current_index, len(self.sources))
+            if self.current_index >= 0:
+                self.show_current()
+                self.status.setText(f"Removed {source.name} from queue")
+            else:
+                self.source = None
+                self.record = None
+                self.preview.scene().clear()
+                self.raw.clear()
+                self.table.setRowCount(0)
+                self.warning.hide()
+                self.status.setText("Queue empty — load a PDF to begin")
+                self.update_navigation()
+
         def show_current(self):
             self.source = self.sources[self.current_index]
             image_path = self.preview_paths.get(self.source)
@@ -171,6 +194,7 @@ def main(argv=None) -> int:
                                     (f" — {self.source.name}" if self.source else ""))
             self.previous_button.setEnabled(not self.busy and self.current_index > 0)
             self.next_button.setEnabled(not self.busy and 0 <= self.current_index < count - 1)
+            self.remove_button.setEnabled(not self.busy and self.source is not None)
             self.process_button.setEnabled(not self.busy and self.source is not None)
             self.export_button.setEnabled(not self.busy and self.record is not None)
 
