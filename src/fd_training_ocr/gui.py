@@ -12,7 +12,7 @@ import tempfile
 from .config import load_config
 from .gui_controller import (FACILITY_LABELS, GuiPaths, apply_facilities_edit, apply_gui_edit,
                              build_processor, effective_facilities, export_record, process_pdf,
-                             index_after_removal, structured_rows, validate_pdfs)
+                             discover_pdfs, index_after_removal, structured_rows, validate_pdfs)
 from .pdf_render import render_pdf
 
 
@@ -85,6 +85,7 @@ def main(argv=None) -> int:
             layout = QtWidgets.QVBoxLayout(central)
             controls = QtWidgets.QHBoxLayout(); layout.addLayout(controls)
             self.load_button = QtWidgets.QPushButton("Add PDFs")
+            self.folder_button = QtWidgets.QPushButton("Add Folder")
             self.remove_button = QtWidgets.QPushButton("Remove PDF")
             self.previous_button = QtWidgets.QPushButton("Previous")
             self.next_button = QtWidgets.QPushButton("Next")
@@ -96,7 +97,8 @@ def main(argv=None) -> int:
             self.process_button.setEnabled(False); self.export_button.setEnabled(False)
             self.progress = QtWidgets.QProgressBar(); self.progress.setRange(0, 1); self.progress.setValue(0)
             self.status = QtWidgets.QLabel("Load a PDF to begin")
-            for widget in (self.load_button, self.remove_button, self.previous_button, self.page_label,
+            for widget in (self.load_button, self.folder_button, self.remove_button,
+                           self.previous_button, self.page_label,
                            self.next_button, self.process_button, self.export_button,
                            self.progress, self.status): controls.addWidget(widget)
             self.warning = QtWidgets.QLabel("")
@@ -116,6 +118,7 @@ def main(argv=None) -> int:
             self.raw = QtWidgets.QPlainTextEdit(); self.raw.setReadOnly(True)
             tabs.addTab(self.raw, "Raw JSON")
             self.load_button.clicked.connect(self.load_pdfs)
+            self.folder_button.clicked.connect(self.load_folder)
             self.remove_button.clicked.connect(self.remove_current_pdf)
             self.previous_button.clicked.connect(lambda: self.navigate(-1))
             self.next_button.clicked.connect(lambda: self.navigate(1))
@@ -140,6 +143,34 @@ def main(argv=None) -> int:
                 self.show_current()
             except Exception as exc:
                 QtWidgets.QMessageBox.critical(self, "Unable to load PDF", str(exc))
+
+        def load_folder(self):
+            name = QtWidgets.QFileDialog.getExistingDirectory(self, "Add folder of training forms")
+            if not name:
+                return
+            try:
+                discovered = discover_pdfs(Path(name))
+                if not discovered:
+                    QtWidgets.QMessageBox.information(
+                        self, "No PDFs found", "The selected folder contains no PDF files.")
+                    return
+                existing = set(self.sources)
+                additions = [source for source in discovered if source not in existing]
+                skipped = len(discovered) - len(additions)
+                first_new = additions[0] if additions else None
+                self.sources.extend(additions)
+                if first_new is not None:
+                    self.current_index = self.sources.index(first_new)
+                    self.show_current()
+                elif self.current_index < 0:
+                    self.current_index = 0
+                    self.show_current()
+                self.status.setText(
+                    f"Added {len(additions)} PDF{'s' if len(additions) != 1 else ''} from folder; "
+                    f"skipped {skipped} duplicate{'s' if skipped != 1 else ''}")
+                self.update_navigation()
+            except Exception as exc:
+                QtWidgets.QMessageBox.critical(self, "Unable to load folder", str(exc))
 
         def navigate(self, offset):
             target = self.current_index + offset
@@ -219,6 +250,7 @@ def main(argv=None) -> int:
         def set_busy(self, busy):
             self.busy = busy
             self.load_button.setEnabled(not busy)
+            self.folder_button.setEnabled(not busy)
             self.progress.setRange(0, 0 if busy else 1)
             if not busy: self.progress.setValue(1)
             self.update_navigation()

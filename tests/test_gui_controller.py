@@ -6,7 +6,7 @@ import unittest
 from fd_training_ocr.config import AppConfig
 from fd_training_ocr.gui_controller import (GuiPaths, apply_facilities_edit, apply_gui_edit,
                                              build_processor, display_value, effective_facilities,
-                                             export_record, index_after_removal, structured_rows,
+                                             discover_pdfs, export_record, index_after_removal, structured_rows,
                                              validate_pdf, validate_pdfs)
 
 
@@ -23,6 +23,17 @@ class GuiControllerTests(unittest.TestCase):
             second = Path(directory) / "second.pdf"; second.write_bytes(b"%PDF")
             self.assertEqual(validate_pdfs([first, second, first]),
                              (first.resolve(), second.resolve()))
+
+    def test_folder_discovery_is_non_recursive_case_insensitive_and_sorted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "z.PDF").write_bytes(b"%PDF")
+            (root / "A.pdf").write_bytes(b"%PDF")
+            (root / "notes.txt").write_text("ignore")
+            nested = root / "nested"; nested.mkdir()
+            (nested / "hidden.pdf").write_bytes(b"%PDF")
+            self.assertEqual(discover_pdfs(root),
+                             ((root / "A.pdf").resolve(), (root / "z.PDF").resolve()))
 
     def test_queue_index_after_removing_current_pdf(self):
         self.assertEqual(index_after_removal(1, 2), 1)

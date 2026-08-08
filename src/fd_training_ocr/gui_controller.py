@@ -44,6 +44,18 @@ def validate_pdfs(paths: list[Path] | tuple[Path, ...]) -> tuple[Path, ...]:
     return tuple(result)
 
 
+def discover_pdfs(directory: Path) -> tuple[Path, ...]:
+    """Return PDFs directly inside a folder in stable filename order."""
+    resolved = directory.expanduser().resolve()
+    if not resolved.is_dir():
+        raise ValueError("Select a readable folder")
+    return tuple(sorted(
+        (path.resolve() for path in resolved.iterdir()
+         if path.is_file() and path.suffix.casefold() == ".pdf"),
+        key=lambda path: (path.name.casefold(), path.name),
+    ))
+
+
 def index_after_removal(removed_index: int, remaining_count: int) -> int:
     """Choose the nearest valid queue index after removing the current PDF."""
     if remaining_count <= 0:
