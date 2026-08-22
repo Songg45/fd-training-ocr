@@ -107,6 +107,27 @@ class GuiControllerTests(unittest.TestCase):
         self.assertIn(("Calculated duration", "1.0 hour", "", False), rows)
         self.assertIn(("Stage 3 resolution", "1 call; 1 field resolved; 0 unresolved", "", False), rows)
 
+    def test_structured_rows_sort_added_attendees_before_description(self):
+        record = {"fields": {
+            "date": {"reviewed_value": "08/22/26"},
+            "attendee.01.unit_id": {"reviewed_value": "7554"},
+            "attendee.01.print_name": {"reviewed_value": "Samantha Gibson"},
+            "description": {"reviewed_value": "Training"},
+            # Added later in dictionary insertion order, but displayed with attendees.
+            "attendee.03.print_name": {"reviewed_value": "Nick Sledge"},
+            "attendee.03.unit_id": {"reviewed_value": "4354"},
+            "attendee.02.print_name": {"reviewed_value": "Alex Myers"},
+            "attendee.02.unit_id": {"reviewed_value": "JR7454"},
+        }, "event": {}}
+        names = [row[0] for row in structured_rows(record)]
+        self.assertLess(names.index("attendee.01.print_name"),
+                        names.index("attendee.02.unit_id"))
+        self.assertLess(names.index("attendee.02.print_name"),
+                        names.index("attendee.03.unit_id"))
+        self.assertLess(names.index("attendee.03.print_name"), names.index("description"))
+        self.assertLess(names.index("attendee.03.unit_id"),
+                        names.index("attendee.03.print_name"))
+
     def test_gui_edit_preserves_machine_values_and_records_review(self):
         record = {"fields":{"instructor":{"raw":"Nick Sleder", "resolved_value":"Nick Sledge",
                                                 "reviewed_value":None}},

@@ -148,7 +148,23 @@ def _event_labels(event: Mapping[str, Any], selection_name: str) -> str:
 
 def structured_rows(record: Mapping[str, Any]) -> tuple[tuple[str, str, str, bool], ...]:
     rows = []
-    for name, field in record.get("fields", {}).items():
+    fields = record.get("fields", {})
+
+    def field_order(name: str) -> tuple[int, int, int, str]:
+        core = {"date": 0, "start_time": 1, "end_time": 2, "location": 3,
+                "total_hours": 4, "instructor": 5}
+        if name in core:
+            return (0, core[name], 0, name)
+        attendee = re.fullmatch(r"attendee\.(\d+)\.(unit_id|print_name)", name)
+        if attendee:
+            column = 0 if attendee.group(2) == "unit_id" else 1
+            return (1, int(attendee.group(1)), column, name)
+        if name == "description":
+            return (2, 0, 0, name)
+        return (3, 0, 0, name)
+
+    ordered_fields = sorted(fields.items(), key=lambda item: field_order(str(item[0])))
+    for name, field in ordered_fields:
         warnings = [str(item) for item in field.get("warnings", ())]
         stage3 = field.get("stage_3")
         if (field.get("second_pass_review_required") and stage3 is not None
