@@ -567,6 +567,15 @@ def main(argv=None) -> int:
             buttons = QtWidgets.QDialogButtonBox(
                 QtWidgets.QDialogButtonBox.StandardButton.Ok |
                 QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+            confirm_button = buttons.button(
+                QtWidgets.QDialogButtonBox.StandardButton.Ok)
+            confirm_button.setText("Add Attendee")
+            confirm_button.setAccessibleName("Confirm Add Attendee")
+            confirm_button.setAccessibleDescription(
+                "Add the attendee using the entered row, Unit ID, and name")
+            cancel_button = buttons.button(
+                QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+            cancel_button.setAccessibleName("Cancel Add Attendee")
             form.addRow(buttons)
 
             def roster_selected(index):
@@ -587,12 +596,24 @@ def main(argv=None) -> int:
                     pass
 
             roster_combo.currentIndexChanged.connect(roster_selected)
+            # Voice Access may update a line edit without producing the same
+            # focus transition as a mouse/keyboard edit. Link on user edits as
+            # well as focus changes, then resolve once more on submission.
+            unit_edit.textEdited.connect(lambda _value: link_roster("unit_id"))
+            name_edit.textEdited.connect(lambda _value: link_roster("print_name"))
             unit_edit.editingFinished.connect(lambda: link_roster("unit_id"))
             name_edit.editingFinished.connect(lambda: link_roster("print_name"))
             buttons.accepted.connect(dialog.accept); buttons.rejected.connect(dialog.reject)
+            unit_edit.setFocus()
             if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
                 return
             try:
+                # Prefer an exact Unit ID match; if the Unit ID is unknown,
+                # allow an exact roster name/alias to provide its unique ID.
+                original_unit = unit_edit.text()
+                link_roster("unit_id")
+                if unit_edit.text() == original_unit and not name_edit.text().strip() == "":
+                    link_roster("print_name")
                 add_attendee(self.record, row_box.value(), unit_edit.text(), name_edit.text())
                 automatic_export(self.record, args.export_dir)
                 self.persist_state()
