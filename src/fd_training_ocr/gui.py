@@ -18,6 +18,7 @@ from .gui_controller import (EVENT_SELECTIONS, GuiPaths, accept_stage3_suggestio
                              automatic_export, build_processor, effective_event_selection,
                              load_gui_state, process_pdf, save_gui_state,
                              discover_pdfs, index_after_removal, structured_rows,
+                             queue_index_for_page,
                              attendee_row_from_field, remove_attendee, roster_table_rows,
                              add_attendee, first_available_attendee_row, save_roster_table,
                              stage3_suggestion, unprocessed_sources,
@@ -110,6 +111,13 @@ def main(argv=None) -> int:
             self.remove_all_button = QtGui.QAction("Remove All", self)
             self.previous_button = QtWidgets.QPushButton("Previous")
             self.next_button = QtWidgets.QPushButton("Next")
+            self.goto_number = QtWidgets.QSpinBox()
+            self.goto_number.setRange(1, 1)
+            self.goto_number.setPrefix("PDF ")
+            self.goto_number.setAccessibleName("PDF number")
+            self.goto_number.setAccessibleDescription(
+                "Enter the PDF number to open, then activate Go To")
+            self.goto_button = QtWidgets.QPushButton("Go To")
             self.page_label = QtWidgets.QLabel("0 of 0")
             self.process_button = QtGui.QAction("Process Selected", self)
             self.process_all_button = QtGui.QAction("Process All", self)
@@ -139,6 +147,7 @@ def main(argv=None) -> int:
             self.remove_button.setEnabled(False)
             self.remove_all_button.setEnabled(False)
             self.previous_button.setEnabled(False); self.next_button.setEnabled(False)
+            self.goto_number.setEnabled(False); self.goto_button.setEnabled(False)
             self.process_button.setEnabled(False); self.process_all_button.setEnabled(False)
             self.stop_button.setEnabled(False)
             self.delete_attendee_button.setEnabled(False)
@@ -149,6 +158,7 @@ def main(argv=None) -> int:
             for widget in (self.add_menu_button, self.remove_menu_button,
                            self.process_menu_button, self.attendees_menu_button,
                            self.previous_button, self.page_label, self.next_button,
+                           self.goto_number, self.goto_button,
                            self.stop_button,
                            self.accept_stage3_button,
                            self.progress, self.status): controls.addWidget(widget)
@@ -159,6 +169,9 @@ def main(argv=None) -> int:
             self.preview = Preview(); splitter.addWidget(self.preview)
             tabs = QtWidgets.QTabWidget(); splitter.addWidget(tabs); splitter.setSizes([700, 650])
             self.table = QtWidgets.QTableWidget(0, 3)
+            self.table.setAccessibleName("Training record fields")
+            self.table.setAccessibleDescription(
+                "Editable OCR fields. Select a result cell and dictate with Voice Access")
             self.table.setHorizontalHeaderLabels(["Field", "Result (editable)", "Warnings"])
             self.table.horizontalHeader().setStretchLastSection(True)
             self.table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.DoubleClicked |
@@ -176,6 +189,8 @@ def main(argv=None) -> int:
             self.remove_all_button.triggered.connect(self.remove_all_pdfs)
             self.previous_button.clicked.connect(lambda: self.navigate(-1))
             self.next_button.clicked.connect(lambda: self.navigate(1))
+            self.goto_button.clicked.connect(self.go_to_pdf)
+            self.goto_number.lineEdit().returnPressed.connect(self.go_to_pdf)
             self.process_button.triggered.connect(self.process)
             self.process_all_button.triggered.connect(self.process_all)
             self.stop_button.clicked.connect(self.request_stop)
@@ -347,15 +362,27 @@ def main(argv=None) -> int:
         def navigate(self, offset):
             target = self.current_index + offset
             if 0 <= target < len(self.sources):
-                try:
-                    if self.record is not None:
-                        automatic_export(self.record, args.export_dir)
-                    self.current_index = target
-                    self.show_current()
-                    self.persist_state()
-                except Exception as exc:
-                    QtWidgets.QMessageBox.critical(
-                        self, "Unable to save or load PDF", str(exc))
+                self.navigate_to(target)
+
+        def navigate_to(self, target):
+            try:
+                if self.record is not None:
+                    automatic_export(self.record, args.export_dir)
+                self.current_index = target
+                self.show_current()
+                self.persist_state()
+            except Exception as exc:
+                QtWidgets.QMessageBox.critical(
+                    self, "Unable to save or load PDF", str(exc))
+
+        def go_to_pdf(self):
+            if self.busy or not self.sources:
+                return
+            try:
+                target = queue_index_for_page(self.goto_number.value(), len(self.sources))
+                self.navigate_to(target)
+            except ValueError as exc:
+                QtWidgets.QMessageBox.warning(self, "Unable to go to PDF", str(exc))
 
         def remove_current_pdf(self):
             if self.busy or not (0 <= self.current_index < len(self.sources)):
@@ -434,6 +461,11 @@ def main(argv=None) -> int:
                                     (f" — {self.source.name}" if self.source else ""))
             self.previous_button.setEnabled(not self.busy and self.current_index > 0)
             self.next_button.setEnabled(not self.busy and 0 <= self.current_index < count - 1)
+            self.goto_number.setRange(1, max(1, count))
+            if count:
+                self.goto_number.setValue(self.current_index + 1)
+            self.goto_number.setEnabled(not self.busy and count > 0)
+            self.goto_button.setEnabled(not self.busy and count > 0)
             self.remove_button.setEnabled(not self.busy and self.source is not None)
             self.remove_all_button.setEnabled(not self.busy and bool(self.sources))
             self.process_button.setEnabled(not self.busy and self.source is not None)

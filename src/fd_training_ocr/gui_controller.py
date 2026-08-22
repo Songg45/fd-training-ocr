@@ -65,6 +65,15 @@ def index_after_removal(removed_index: int, remaining_count: int) -> int:
     return min(removed_index, remaining_count - 1)
 
 
+def queue_index_for_page(page_number: int, queue_count: int) -> int:
+    """Convert a user-facing one-based Go To page into a queue index."""
+    if queue_count < 1:
+        raise ValueError("the PDF queue is empty")
+    if not 1 <= page_number <= queue_count:
+        raise ValueError(f"PDF number must be between 1 and {queue_count}")
+    return page_number - 1
+
+
 def unprocessed_sources(sources: list[Path] | tuple[Path, ...],
                         records: Mapping[Path, Any]) -> tuple[Path, ...]:
     """Return queued PDFs that do not yet have a completed in-memory result."""

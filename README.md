@@ -89,8 +89,8 @@ contents or its path.
 ## Local desktop GUI
 
 The optional PySide6 desktop front end can hold multiple one-page PDFs while retaining the
-tested CLI pipeline. Add PDFs with multi-select, then use Previous/Next and the position
-indicator to paginate between forms; processed results and reviewer edits remain attached
+tested CLI pipeline. Add PDFs with multi-select, then use Previous/Next or Go To and the
+position indicator to navigate forms; processed results and reviewer edits remain attached
 to each PDF while navigating. It shows a zoomable and pannable page preview on the left and
 editable structured field results plus the complete JSON record on the right. Training
 type, truck, facilities, calculated duration, and Stage-3 resolution status appear as

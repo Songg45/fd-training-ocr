@@ -14,6 +14,7 @@ from fd_training_ocr.gui_controller import (GuiPaths, accept_stage3_suggestion, 
                                              build_processor, display_value, effective_event_selection,
                                              effective_facilities,
                                              discover_pdfs, export_record, index_after_removal, structured_rows,
+                                             queue_index_for_page,
                                              load_gui_state, save_gui_state, unprocessed_sources,
                                              attendee_row_from_field, remove_attendee,
                                              first_available_attendee_row,
@@ -53,6 +54,12 @@ class GuiControllerTests(unittest.TestCase):
         self.assertEqual(index_after_removal(1, 2), 1)
         self.assertEqual(index_after_removal(2, 2), 1)
         self.assertEqual(index_after_removal(0, 0), -1)
+
+    def test_go_to_page_uses_one_based_pdf_numbers(self):
+        self.assertEqual(queue_index_for_page(1, 10), 0)
+        self.assertEqual(queue_index_for_page(10, 10), 9)
+        with self.assertRaisesRegex(ValueError, "between 1 and 10"):
+            queue_index_for_page(11, 10)
 
     def test_batch_selection_skips_completed_records_and_preserves_order(self):
         first, second, third = Path("1.pdf"), Path("2.pdf"), Path("3.pdf")
