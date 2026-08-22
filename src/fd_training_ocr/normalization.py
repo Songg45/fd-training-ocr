@@ -25,7 +25,8 @@ def _empty(raw: str | None) -> NormalizedValue | None:
 def normalize_date(raw: str | None) -> NormalizedValue:
     if result := _empty(raw): return result
     text = raw.strip()
-    for fmt in ("%m/%d/%Y", "%m/%d/%y", "%m-%d-%Y", "%m-%d-%y", "%Y-%m-%d"):
+    for fmt in ("%m/%d/%Y", "%m/%d/%y", "%m-%d-%Y", "%m-%d-%y",
+                "%m%d%Y", "%m%d%y", "%Y-%m-%d"):
         try:
             return NormalizedValue(raw, datetime.strptime(text, fmt).date().isoformat(), True)
         except ValueError:

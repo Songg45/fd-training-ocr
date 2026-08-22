@@ -12,6 +12,8 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual(normalize_date("12-17-25").normalized, "2025-12-17")
         self.assertEqual(canonical_date("12/1/2025"), "12/01/25")
         self.assertEqual(canonical_date("12-1-25"), "12/01/25")
+        self.assertEqual(canonical_date("081526"), "08/15/26")
+        self.assertEqual(canonical_date("08152026"), "08/15/26")
 
     def test_invalid_date_is_not_rewritten(self):
         value = normalize_date("LZ//WOES")
