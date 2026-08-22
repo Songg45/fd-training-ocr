@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -569,8 +569,8 @@ def automatic_export(record: Mapping[str, Any], directory: Path) -> Path:
 def create_startup_backup(*, backup_dir: Path, export_dir: Path,
                           state_file: Path, config_file: Path | None,
                           roster_file: Path | None, keep: int = 20,
-                          snapshot_date: date | None = None) -> Path | None:
-    """Create one immutable MM-DD-YYYY snapshot of mutable application data."""
+                          snapshot_at: datetime | None = None) -> Path | None:
+    """Create an immutable MM-DD-YYYY/HH-MM-SS startup data snapshot."""
     if keep < 1:
         raise ValueError("backup retention must be at least 1")
     root = backup_dir.expanduser().resolve()
@@ -598,9 +598,15 @@ def create_startup_backup(*, backup_dir: Path, export_dir: Path,
     files.sort(key=lambda item: str(item["path"]).casefold())
 
     root.mkdir(parents=True, exist_ok=True)
-    destination = root / (snapshot_date or date.today()).strftime("%m-%d-%Y")
+    timestamp = snapshot_at or datetime.now()
+    date_directory = root / timestamp.strftime("%m-%d-%Y")
+    date_directory.mkdir(exist_ok=True)
+    base = timestamp.strftime("%H-%M-%S")
+    destination = date_directory / base
+    suffix = 2
     while destination.exists():
-        return None
+        destination = date_directory / f"{base}-{suffix}"
+        suffix += 1
     destination.mkdir()
     for source, archive_path in sources:
         target = destination / archive_path
@@ -611,18 +617,31 @@ def create_startup_backup(*, backup_dir: Path, export_dir: Path,
     (destination / "backup-manifest.json").write_text(
         json.dumps(manifest, indent=2), encoding="utf-8")
 
-    dated_snapshots = []
-    for path in root.iterdir():
-        if not path.is_dir():
+    dated_snapshots: list[tuple[datetime, Path]] = []
+    for day_path in root.iterdir():
+        if not day_path.is_dir():
             continue
         try:
-            parsed = datetime.strptime(path.name, "%m-%d-%Y").date()
+            day = datetime.strptime(day_path.name, "%m-%d-%Y")
         except ValueError:
             continue
-        dated_snapshots.append((parsed, path))
+        for snapshot in day_path.iterdir():
+            if not snapshot.is_dir():
+                continue
+            match = re.fullmatch(r"(\d{2}-\d{2}-\d{2})(?:-\d+)?", snapshot.name)
+            if match is None:
+                continue
+            try:
+                clock = datetime.strptime(match.group(1), "%H-%M-%S").time()
+            except ValueError:
+                continue
+            dated_snapshots.append((datetime.combine(day.date(), clock), snapshot))
     dated_snapshots.sort()
     for _, obsolete in dated_snapshots[:-keep]:
         shutil.rmtree(obsolete)
+    for day_path in root.iterdir():
+        if day_path.is_dir() and not any(day_path.iterdir()):
+            day_path.rmdir()
     return destination
 
 

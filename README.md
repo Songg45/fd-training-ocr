@@ -103,10 +103,11 @@ the main thread, and a prominent banner identifies records requiring human revie
 are stored as separate reviewed values without replacing machine evidence. Results are
 automatically written to the configured export folder after processing, after edits, when
 moving with Previous/Next, and when closing the GUI; no separate export action is required.
-At startup the GUI snapshots exported JSON, roster, queue state, and configuration into one
-immutable daily folder such as `C:\Temp\FDTrainingOCR-Backups\08-22-2026`. Reopening the GUI
-on the same day leaves that day's snapshot untouched, and the latest 20 dated snapshots are
-retained. Use `--backup-dir` to select another backup location.
+At startup the GUI snapshots exported JSON, roster, queue state, and configuration into an
+immutable dated and timed folder such as
+`C:\Temp\FDTrainingOCR-Backups\08-22-2026\19-42-10`. Every launch creates a recovery point;
+the latest 20 snapshots are retained across all dates. Use `--backup-dir` to select another
+backup location.
 
 Launch it with the same local master, template, configuration, and Poppler executable used
 by the CLI:
