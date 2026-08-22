@@ -11,6 +11,7 @@ from fd_training_ocr.gui_controller import (GuiPaths, accept_stage3_suggestion, 
                                              populate_name_from_roster_unit,
                                              populate_unit_from_roster_name,
                                              automatic_export, automatic_export_stem,
+                                             create_startup_backup,
                                              build_processor, display_value, effective_event_selection,
                                              effective_facilities,
                                              discover_pdfs, export_record, index_after_removal, structured_rows,
@@ -362,6 +363,32 @@ class GuiControllerTests(unittest.TestCase):
             self.assertTrue(dated.exists())
             self.assertFalse(undated.exists())
             self.assertEqual(list(export_dir.glob("*.json")), [dated])
+
+    def test_startup_backup_snapshots_data_skips_duplicates_and_prunes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            exports = root / "Exported"; exports.mkdir()
+            backups = root / "Backups"
+            state = root / "state.json"; state.write_text('{"state":1}')
+            config = root / "config.toml"; config.write_text("[app]")
+            roster = root / "roster.json"; roster.write_text('{"members":[]}')
+            result = exports / "one.json"; result.write_text('{"value":1}')
+            first = create_startup_backup(
+                backup_dir=backups, export_dir=exports, state_file=state,
+                config_file=config, roster_file=roster, keep=2)
+            self.assertIsNotNone(first)
+            self.assertEqual((first / "Exported" / "one.json").read_text(), '{"value":1}')
+            self.assertTrue((first / "Configuration" / "config.toml").is_file())
+            self.assertIsNone(create_startup_backup(
+                backup_dir=backups, export_dir=exports, state_file=state,
+                config_file=config, roster_file=roster, keep=2))
+            result.write_text('{"value":2}')
+            create_startup_backup(backup_dir=backups, export_dir=exports, state_file=state,
+                                  config_file=config, roster_file=roster, keep=2)
+            result.write_text('{"value":3}')
+            create_startup_backup(backup_dir=backups, export_dir=exports, state_file=state,
+                                  config_file=config, roster_file=roster, keep=2)
+            self.assertEqual(len([path for path in backups.iterdir() if path.is_dir()]), 2)
 
     def test_gui_state_round_trip_restores_results_failures_and_position(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 import re
+import shutil
 from typing import Any, Callable, Mapping, MutableMapping
 
 from .config import AppConfig
@@ -561,6 +563,70 @@ def automatic_export(record: Mapping[str, Any], directory: Path) -> Path:
     for obsolete in owned_paths:
         if obsolete != destination:
             obsolete.unlink(missing_ok=True)
+    return destination
+
+
+def create_startup_backup(*, backup_dir: Path, export_dir: Path,
+                          state_file: Path, config_file: Path | None,
+                          roster_file: Path | None, keep: int = 20) -> Path | None:
+    """Snapshot mutable application data once per distinct content state."""
+    if keep < 1:
+        raise ValueError("backup retention must be at least 1")
+    root = backup_dir.expanduser().resolve()
+    sources: list[tuple[Path, Path]] = []
+    exports = export_dir.expanduser().resolve()
+    if exports.is_dir():
+        sources.extend((path, Path("Exported") / path.name)
+                       for path in sorted(exports.glob("*.json")) if path.is_file())
+    candidates = ((config_file, Path("Configuration") / "config.toml"),
+                  (roster_file, Path("Roster") / "roster.json"),
+                  (state_file, Path("State") / "gui-state.json"))
+    for source, archive_path in candidates:
+        if source is not None:
+            resolved = source.expanduser().resolve()
+            if resolved.is_file():
+                sources.append((resolved, archive_path))
+    if not sources:
+        return None
+
+    files = []
+    for source, archive_path in sources:
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        files.append({"path": archive_path.as_posix(), "sha256": digest,
+                      "size": source.stat().st_size})
+    files.sort(key=lambda item: str(item["path"]).casefold())
+
+    existing = sorted(path for path in root.iterdir() if path.is_dir()) if root.is_dir() else []
+    for snapshot in reversed(existing):
+        manifest = snapshot / "backup-manifest.json"
+        try:
+            previous = json.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if previous.get("files") == files:
+            return None
+        break
+
+    root.mkdir(parents=True, exist_ok=True)
+    base = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    destination = root / base
+    suffix = 2
+    while destination.exists():
+        destination = root / f"{base}-{suffix}"
+        suffix += 1
+    destination.mkdir()
+    for source, archive_path in sources:
+        target = destination / archive_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+    manifest = {"schema_version": 1,
+                "created_at": datetime.now(timezone.utc).isoformat(), "files": files}
+    (destination / "backup-manifest.json").write_text(
+        json.dumps(manifest, indent=2), encoding="utf-8")
+
+    snapshots = sorted(path for path in root.iterdir() if path.is_dir())
+    for obsolete in snapshots[:-keep]:
+        shutil.rmtree(obsolete)
     return destination
 
 

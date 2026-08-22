@@ -103,6 +103,9 @@ the main thread, and a prominent banner identifies records requiring human revie
 are stored as separate reviewed values without replacing machine evidence. Results are
 automatically written to the configured export folder after processing, after edits, when
 moving with Previous/Next, and when closing the GUI; no separate export action is required.
+At startup the GUI snapshots exported JSON, roster, queue state, and configuration into
+`C:\Temp\FDTrainingOCR-Backups`; unchanged data does not create a duplicate, and the latest
+20 distinct snapshots are retained. Use `--backup-dir` to select another backup location.
 
 Launch it with the same local master, template, configuration, and Poppler executable used
 by the CLI:

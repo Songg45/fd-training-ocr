@@ -16,6 +16,7 @@ from .gui_controller import (EVENT_SELECTIONS, GuiPaths, accept_stage3_suggestio
                              populate_name_from_roster_unit,
                              populate_unit_from_roster_name,
                              automatic_export, build_processor, effective_event_selection,
+                             create_startup_backup,
                              load_gui_state, process_pdf, save_gui_state,
                              discover_pdfs, display_value, index_after_removal, structured_rows,
                              queue_index_for_page,
@@ -45,6 +46,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--export-dir", type=Path, default=Path(r"C:\Temp\Exported"))
     parser.add_argument("--state-file", type=Path,
                         default=Path(r"C:\Temp\fd-training-ocr-gui-state.json"))
+    parser.add_argument("--backup-dir", type=Path,
+                        default=Path(r"C:\Temp\FDTrainingOCR-Backups"))
     return parser
 
 
@@ -54,6 +57,14 @@ def main(argv=None) -> int:
         config = load_config(args.config)
         paths = GuiPaths(args.master, args.template,
                          args.output_dir or config.output_dir / "gui", args.pdftoppm)
+        backup_warning = None
+        try:
+            create_startup_backup(
+                backup_dir=args.backup_dir, export_dir=args.export_dir,
+                state_file=args.state_file, config_file=args.config,
+                roster_file=config.roster_path)
+        except (OSError, ValueError) as exc:
+            backup_warning = str(exc)
         QtCore, QtGui, QtWidgets = _qt()
     except (OSError, ValueError, RuntimeError) as exc:
         print(str(exc), file=sys.stderr)
@@ -950,6 +961,11 @@ def main(argv=None) -> int:
 
     app = QtWidgets.QApplication(sys.argv[:1])
     window = Window(); window.show()
+    if backup_warning:
+        QtWidgets.QMessageBox.warning(
+            window, "Startup backup failed",
+            "The application opened, but its startup backup could not be created:\n\n"
+            + backup_warning)
     return app.exec()
 
 
