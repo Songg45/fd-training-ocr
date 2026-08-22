@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -568,8 +568,9 @@ def automatic_export(record: Mapping[str, Any], directory: Path) -> Path:
 
 def create_startup_backup(*, backup_dir: Path, export_dir: Path,
                           state_file: Path, config_file: Path | None,
-                          roster_file: Path | None, keep: int = 20) -> Path | None:
-    """Snapshot mutable application data once per distinct content state."""
+                          roster_file: Path | None, keep: int = 20,
+                          snapshot_date: date | None = None) -> Path | None:
+    """Create one immutable MM-DD-YYYY snapshot of mutable application data."""
     if keep < 1:
         raise ValueError("backup retention must be at least 1")
     root = backup_dir.expanduser().resolve()
@@ -596,24 +597,10 @@ def create_startup_backup(*, backup_dir: Path, export_dir: Path,
                       "size": source.stat().st_size})
     files.sort(key=lambda item: str(item["path"]).casefold())
 
-    existing = sorted(path for path in root.iterdir() if path.is_dir()) if root.is_dir() else []
-    for snapshot in reversed(existing):
-        manifest = snapshot / "backup-manifest.json"
-        try:
-            previous = json.loads(manifest.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if previous.get("files") == files:
-            return None
-        break
-
     root.mkdir(parents=True, exist_ok=True)
-    base = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    destination = root / base
-    suffix = 2
+    destination = root / (snapshot_date or date.today()).strftime("%m-%d-%Y")
     while destination.exists():
-        destination = root / f"{base}-{suffix}"
-        suffix += 1
+        return None
     destination.mkdir()
     for source, archive_path in sources:
         target = destination / archive_path
@@ -624,8 +611,17 @@ def create_startup_backup(*, backup_dir: Path, export_dir: Path,
     (destination / "backup-manifest.json").write_text(
         json.dumps(manifest, indent=2), encoding="utf-8")
 
-    snapshots = sorted(path for path in root.iterdir() if path.is_dir())
-    for obsolete in snapshots[:-keep]:
+    dated_snapshots = []
+    for path in root.iterdir():
+        if not path.is_dir():
+            continue
+        try:
+            parsed = datetime.strptime(path.name, "%m-%d-%Y").date()
+        except ValueError:
+            continue
+        dated_snapshots.append((parsed, path))
+    dated_snapshots.sort()
+    for _, obsolete in dated_snapshots[:-keep]:
         shutil.rmtree(obsolete)
     return destination
 

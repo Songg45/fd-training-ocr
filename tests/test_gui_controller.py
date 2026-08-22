@@ -1,4 +1,5 @@
 import json
+from datetime import date
 from pathlib import Path
 import tempfile
 import unittest
@@ -364,7 +365,7 @@ class GuiControllerTests(unittest.TestCase):
             self.assertFalse(undated.exists())
             self.assertEqual(list(export_dir.glob("*.json")), [dated])
 
-    def test_startup_backup_snapshots_data_skips_duplicates_and_prunes(self):
+    def test_startup_backup_creates_one_dated_snapshot_per_day_and_prunes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             exports = root / "Exported"; exports.mkdir()
@@ -375,20 +376,26 @@ class GuiControllerTests(unittest.TestCase):
             result = exports / "one.json"; result.write_text('{"value":1}')
             first = create_startup_backup(
                 backup_dir=backups, export_dir=exports, state_file=state,
-                config_file=config, roster_file=roster, keep=2)
+                config_file=config, roster_file=roster, keep=2,
+                snapshot_date=date(2026, 8, 20))
             self.assertIsNotNone(first)
+            self.assertEqual(first.name, "08-20-2026")
             self.assertEqual((first / "Exported" / "one.json").read_text(), '{"value":1}')
             self.assertTrue((first / "Configuration" / "config.toml").is_file())
             self.assertIsNone(create_startup_backup(
                 backup_dir=backups, export_dir=exports, state_file=state,
-                config_file=config, roster_file=roster, keep=2))
+                config_file=config, roster_file=roster, keep=2,
+                snapshot_date=date(2026, 8, 20)))
             result.write_text('{"value":2}')
             create_startup_backup(backup_dir=backups, export_dir=exports, state_file=state,
-                                  config_file=config, roster_file=roster, keep=2)
+                                  config_file=config, roster_file=roster, keep=2,
+                                  snapshot_date=date(2026, 8, 21))
             result.write_text('{"value":3}')
             create_startup_backup(backup_dir=backups, export_dir=exports, state_file=state,
-                                  config_file=config, roster_file=roster, keep=2)
-            self.assertEqual(len([path for path in backups.iterdir() if path.is_dir()]), 2)
+                                  config_file=config, roster_file=roster, keep=2,
+                                  snapshot_date=date(2026, 8, 22))
+            self.assertEqual(sorted(path.name for path in backups.iterdir() if path.is_dir()),
+                             ["08-21-2026", "08-22-2026"])
 
     def test_gui_state_round_trip_restores_results_failures_and_position(self):
         with tempfile.TemporaryDirectory() as directory:
