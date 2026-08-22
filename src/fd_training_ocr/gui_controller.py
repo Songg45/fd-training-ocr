@@ -13,7 +13,7 @@ from typing import Any, Callable, Mapping, MutableMapping
 
 from .config import AppConfig
 from .export import FormRecord, source_sha256
-from .normalization import canonical_date
+from .normalization import canonical_date, normalize_time
 from .pipeline import processor_factory
 from .recognition import OllamaVisionProvider
 from .validation import ValidationPolicy, load_roster
@@ -260,6 +260,11 @@ def apply_gui_edit(record: MutableMapping[str, Any], field_name: str, value: str
         if formatted is None:
             raise ValueError("date must be a valid MM/DD/YY date")
         value = formatted
+    if field_name in {"start_time", "end_time"} and value:
+        normalized_time = normalize_time(value)
+        if not normalized_time.valid or normalized_time.normalized is None:
+            raise ValueError("time must be a valid 24-hour HH:MM time")
+        value = normalized_time.normalized
     stamp = reviewed_at or datetime.now(timezone.utc).isoformat()
     field["reviewed_value"] = value if value != "" else None
     field["review"] = {"status": "corrected", "reviewed_at": stamp}

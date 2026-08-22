@@ -165,9 +165,11 @@ class GuiControllerTests(unittest.TestCase):
         record = {"fields": {
             "start_time": {"reviewed_value": None},
             "end_time": {"reviewed_value": None}}, "event": {}, "review": {}}
-        apply_gui_edit(record, "start_time", "18:00", "2026-08-08T12:00:00Z")
+        apply_gui_edit(record, "start_time", "1800 ", "2026-08-08T12:00:00Z")
+        self.assertEqual(record["fields"]["start_time"]["reviewed_value"], "18:00")
         self.assertIsNone(record["event"]["total_hours_calculated"])
-        apply_gui_edit(record, "end_time", "22:00", "2026-08-08T12:01:00Z")
+        apply_gui_edit(record, "end_time", "2200 ", "2026-08-08T12:01:00Z")
+        self.assertEqual(record["fields"]["end_time"]["reviewed_value"], "22:00")
         self.assertEqual(record["event"]["total_hours_calculated"], 4.0)
 
     def test_unit_id_edit_updates_attendee_name_from_exact_roster_match(self):
