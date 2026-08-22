@@ -92,9 +92,13 @@ The optional PySide6 desktop front end can hold multiple one-page PDFs while ret
 tested CLI pipeline. Add PDFs with multi-select, then use Previous/Next or Go To and the
 position indicator to navigate forms; processed results and reviewer edits remain attached
 to each PDF while navigating. It shows a zoomable and pannable page preview on the left and
-editable structured field results plus the complete JSON record on the right. Training
-type, truck, facilities, calculated duration, and Stage-3 resolution status appear as
-read-only summary rows. OCR runs in a background executor while all Qt work remains on
+editable structured field results plus the complete JSON record on the right. The structured
+view uses labeled standard Windows-accessible inputs with a predictable tab order so Windows
+11 Voice Access can target fields by name and dictate corrections. Training type, truck, and
+facilities use labeled selection buttons; calculated duration and Stage-3 resolution remain
+read-only. Dedicated Add Attendee and Delete Attendee buttons are voice-targetable. The Add
+Attendee dialog links exact roster Unit IDs to canonical names and unique roster names or
+aliases back to Unit IDs. OCR runs in a background executor while all Qt work remains on
 the main thread, and a prominent banner identifies records requiring human review. Edits
 are stored as separate reviewed values without replacing machine evidence. Results are
 automatically written to the configured export folder after processing, after edits, when

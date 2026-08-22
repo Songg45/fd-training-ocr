@@ -352,6 +352,21 @@ def populate_name_from_roster_unit(record: MutableMapping[str, Any], field_name:
     return canonical_name
 
 
+def roster_linked_attendee_values(unit_id: str, print_name: str, roster_path: Path,
+                                  repository_root: Path,
+                                  changed: str) -> tuple[str, str]:
+    """Resolve exact roster values for the Add Attendee dialog without losing manual text."""
+    roster = load_roster(roster_path, repository_root)
+    if changed == "unit_id":
+        member = roster.member_for_unit(unit_id)
+        return (unit_id, member.name if member is not None else print_name)
+    if changed == "print_name":
+        member = roster.member_for_name(print_name)
+        resolved = member.unit_ids[0] if member is not None and len(member.unit_ids) == 1 else unit_id
+        return (resolved, member.name if member is not None else print_name)
+    raise ValueError(f"unknown attendee field: {changed}")
+
+
 def stage3_suggestion(record: Mapping[str, Any], field_name: str) -> Any:
     field = record.get("fields", {}).get(field_name)
     if (not isinstance(field, Mapping) or not field.get("second_pass_review_required")

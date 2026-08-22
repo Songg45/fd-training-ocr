@@ -17,10 +17,11 @@ from .gui_controller import (EVENT_SELECTIONS, GuiPaths, accept_stage3_suggestio
                              populate_unit_from_roster_name,
                              automatic_export, build_processor, effective_event_selection,
                              load_gui_state, process_pdf, save_gui_state,
-                             discover_pdfs, index_after_removal, structured_rows,
+                             discover_pdfs, display_value, index_after_removal, structured_rows,
                              queue_index_for_page,
                              attendee_row_from_field, remove_attendee, roster_table_rows,
                              add_attendee, first_available_attendee_row, save_roster_table,
+                             roster_linked_attendee_values,
                              stage3_suggestion, unprocessed_sources,
                              validate_pdfs, alignment_fallback_record)
 from .pdf_render import render_pdf
@@ -124,6 +125,14 @@ def main(argv=None) -> int:
             self.stop_button = QtWidgets.QPushButton("Stop After Current")
             self.delete_attendee_button = QtGui.QAction("Delete Attendee", self)
             self.add_attendee_button = QtGui.QAction("Add Attendee", self)
+            self.add_attendee_voice_button = QtWidgets.QPushButton("Add Attendee")
+            self.add_attendee_voice_button.setAccessibleName("Add Attendee")
+            self.add_attendee_voice_button.setAccessibleDescription(
+                "Open labeled inputs to add an attendee to this record")
+            self.delete_attendee_voice_button = QtWidgets.QPushButton("Delete Attendee")
+            self.delete_attendee_voice_button.setAccessibleName("Delete Attendee")
+            self.delete_attendee_voice_button.setAccessibleDescription(
+                "Delete the attendee whose Unit ID or Name field is selected")
             self.accept_stage3_button = QtWidgets.QPushButton("Accept Stage 3")
 
             def menu_tool(text, actions):
@@ -152,6 +161,8 @@ def main(argv=None) -> int:
             self.stop_button.setEnabled(False)
             self.delete_attendee_button.setEnabled(False)
             self.add_attendee_button.setEnabled(False)
+            self.add_attendee_voice_button.setEnabled(False)
+            self.delete_attendee_voice_button.setEnabled(False)
             self.accept_stage3_button.setEnabled(False)
             self.progress = QtWidgets.QProgressBar(); self.progress.setRange(0, 1); self.progress.setValue(0)
             self.status = QtWidgets.QLabel("Load a PDF to begin")
@@ -160,6 +171,7 @@ def main(argv=None) -> int:
                            self.previous_button, self.page_label, self.next_button,
                            self.goto_number, self.goto_button,
                            self.stop_button,
+                           self.add_attendee_voice_button, self.delete_attendee_voice_button,
                            self.accept_stage3_button,
                            self.progress, self.status): controls.addWidget(widget)
             self.warning = QtWidgets.QLabel("")
@@ -168,18 +180,19 @@ def main(argv=None) -> int:
             splitter = QtWidgets.QSplitter(); layout.addWidget(splitter, 1)
             self.preview = Preview(); splitter.addWidget(self.preview)
             tabs = QtWidgets.QTabWidget(); splitter.addWidget(tabs); splitter.setSizes([700, 650])
-            self.table = QtWidgets.QTableWidget(0, 3)
-            self.table.setAccessibleName("Training record fields")
-            self.table.setAccessibleDescription(
-                "Editable OCR fields. Select a result cell and dictate with Voice Access")
-            self.table.setHorizontalHeaderLabels(["Field", "Result (editable)", "Warnings"])
-            self.table.horizontalHeader().setStretchLastSection(True)
-            self.table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.DoubleClicked |
-                                       QtWidgets.QAbstractItemView.EditTrigger.EditKeyPressed)
-            self.table.itemChanged.connect(self.result_edited)
-            self.table.cellDoubleClicked.connect(self.summary_activated)
-            self.table.currentCellChanged.connect(lambda *_: self.update_selection_buttons())
-            tabs.addTab(self.table, "Structured Results")
+            self.form_scroll = QtWidgets.QScrollArea()
+            self.form_scroll.setWidgetResizable(True)
+            self.form_scroll.setAccessibleName("Training record form")
+            self.form_scroll.setAccessibleDescription(
+                "Labeled editable training record fields for Windows Voice Access")
+            self.form_widget = QtWidgets.QWidget()
+            self.form_layout = QtWidgets.QGridLayout(self.form_widget)
+            self.form_layout.setColumnStretch(1, 2)
+            self.form_layout.setColumnStretch(2, 1)
+            self.form_scroll.setWidget(self.form_widget)
+            self.field_controls = {}
+            self.focused_field_name = None
+            tabs.addTab(self.form_scroll, "Structured Results")
             self.raw = QtWidgets.QPlainTextEdit(); self.raw.setReadOnly(True)
             tabs.addTab(self.raw, "Raw JSON")
             self.load_button.triggered.connect(self.load_pdfs)
@@ -196,8 +209,20 @@ def main(argv=None) -> int:
             self.stop_button.clicked.connect(self.request_stop)
             self.delete_attendee_button.triggered.connect(self.delete_selected_attendee)
             self.add_attendee_button.triggered.connect(self.add_attendee_dialog)
+            self.add_attendee_voice_button.clicked.connect(self.add_attendee_dialog)
+            self.delete_attendee_voice_button.clicked.connect(self.delete_selected_attendee)
             self.accept_stage3_button.clicked.connect(self.accept_selected_stage3)
             self.restore_state()
+
+        def eventFilter(self, watched, event):
+            field_name = watched.property("fieldName") if watched is not None else None
+            if field_name and event.type() == QtCore.QEvent.Type.FocusIn:
+                self.focused_field_name = str(field_name)
+                self.update_selection_buttons()
+            if (field_name and event.type() == QtCore.QEvent.Type.FocusOut
+                    and isinstance(watched, QtWidgets.QPlainTextEdit)):
+                self.save_field_control(str(field_name), watched.toPlainText())
+            return super().eventFilter(watched, event)
 
         def restore_state(self):
             try:
@@ -400,7 +425,7 @@ def main(argv=None) -> int:
                 self.record = None
                 self.preview.scene().clear()
                 self.raw.clear()
-                self.table.setRowCount(0)
+                self.clear_record_form()
                 self.warning.hide()
                 self.status.setText("Queue empty — load a PDF to begin")
                 self.update_navigation()
@@ -424,7 +449,7 @@ def main(argv=None) -> int:
             self.record = None
             self.preview.scene().clear()
             self.raw.clear()
-            self.table.setRowCount(0)
+            self.clear_record_form()
             self.warning.hide()
             self.status.setText("Queue cleared — source PDFs and exports were preserved")
             self.update_navigation()
@@ -441,7 +466,7 @@ def main(argv=None) -> int:
             self.preview.show_image(image_path)
             self.record = self.records.get(self.source)
             if self.record is None:
-                self.raw.clear(); self.table.setRowCount(0)
+                self.raw.clear(); self.clear_record_form()
                 failure = self.failures.get(self.source)
                 if failure:
                     self.warning.setText(f"PROCESSING FAILED — {failure}")
@@ -474,6 +499,7 @@ def main(argv=None) -> int:
             self.stop_button.setEnabled(
                 self.busy and self.batch_total > 0 and not self.stop_requested)
             self.add_attendee_button.setEnabled(not self.busy and self.record is not None)
+            self.add_attendee_voice_button.setEnabled(not self.busy and self.record is not None)
             self.update_selection_buttons()
             self.update_menu_buttons()
 
@@ -514,6 +540,15 @@ def main(argv=None) -> int:
             row_box = QtWidgets.QSpinBox(); row_box.setRange(1, 19); row_box.setValue(available)
             unit_edit = QtWidgets.QLineEdit()
             name_edit = QtWidgets.QLineEdit()
+            roster_combo.setAccessibleName("Roster member")
+            row_box.setAccessibleName("Attendee row")
+            row_box.setAccessibleDescription("Choose the numbered attendee row")
+            unit_edit.setAccessibleName("Attendee Unit ID")
+            unit_edit.setAccessibleDescription(
+                "Enter a Unit ID. An exact roster match fills the attendee name")
+            name_edit.setAccessibleName("Attendee Name")
+            name_edit.setAccessibleDescription(
+                "Enter a roster name or alias. A unique match fills the Unit ID")
             form.addRow("Roster", roster_combo)
             form.addRow("Form row", row_box)
             form.addRow("Unit ID", unit_edit)
@@ -528,7 +563,21 @@ def main(argv=None) -> int:
                 if selection:
                     name_edit.setText(selection[0]); unit_edit.setText(selection[1])
 
+            def link_roster(changed):
+                if config.roster_path is None:
+                    return
+                try:
+                    unit_id, print_name = roster_linked_attendee_values(
+                        unit_edit.text(), name_edit.text(), config.roster_path,
+                        Path.cwd(), changed)
+                    unit_edit.setText(unit_id)
+                    name_edit.setText(print_name)
+                except (OSError, ValueError):
+                    pass
+
             roster_combo.currentIndexChanged.connect(roster_selected)
+            unit_edit.editingFinished.connect(lambda: link_roster("unit_id"))
+            name_edit.editingFinished.connect(lambda: link_roster("print_name"))
             buttons.accepted.connect(dialog.accept); buttons.rejected.connect(dialog.reject)
             if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
                 return
@@ -543,19 +592,16 @@ def main(argv=None) -> int:
                 QtWidgets.QMessageBox.critical(self, "Unable to add attendee", str(exc))
 
         def selected_attendee_row(self):
-            row = self.table.currentRow()
-            item = self.table.item(row, 0) if row >= 0 else None
-            return attendee_row_from_field(item.text()) if item is not None else None
+            return attendee_row_from_field(self.focused_field_name or "")
 
         def update_attendee_button(self):
-            self.delete_attendee_button.setEnabled(
-                not self.busy and self.record is not None
-                and self.selected_attendee_row() is not None)
+            enabled = (not self.busy and self.record is not None
+                       and self.selected_attendee_row() is not None)
+            self.delete_attendee_button.setEnabled(enabled)
+            self.delete_attendee_voice_button.setEnabled(enabled)
 
         def selected_field_name(self):
-            row = self.table.currentRow()
-            item = self.table.item(row, 0) if row >= 0 else None
-            return item.text() if item is not None else None
+            return self.focused_field_name
 
         def update_selection_buttons(self):
             self.update_attendee_button()
@@ -706,50 +752,94 @@ def main(argv=None) -> int:
 
         def display_record(self, record):
             self.raw.setPlainText(json.dumps(record, indent=2, ensure_ascii=False))
-            rows = structured_rows(record); self.table.blockSignals(True); self.table.setRowCount(len(rows))
-            for row, values in enumerate(rows):
-                name, value, warnings, editable = values
-                for column, text in enumerate((name, value, warnings)):
-                    item = QtWidgets.QTableWidgetItem(text)
-                    item.setToolTip(text)
-                    if column == 1:
-                        item.setData(QtCore.Qt.ItemDataRole.UserRole, name)
-                    if column != 1 or not editable:
-                        item.setFlags(item.flags() & ~QtCore.Qt.ItemFlag.ItemIsEditable)
-                    self.table.setItem(row, column, item)
-            self.table.blockSignals(False)
+            self.build_record_form(structured_rows(record))
             needs_review = record.get("status") == "review_required"
             self.warning.setText("REVIEW REQUIRED — " + ("; ".join(record.get("warnings", ())) or "one or more fields require review"))
             self.warning.setVisible(needs_review); self.status.setText("Complete — review required" if needs_review else "Complete")
             self.update_selection_buttons()
 
-        def result_edited(self, item):
-            if self.record is None or item.column() != 1:
+        def clear_record_form(self):
+            while self.form_layout.count():
+                item = self.form_layout.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
+            self.field_controls.clear()
+            self.focused_field_name = None
+
+        def build_record_form(self, rows):
+            previous = self.focused_field_name
+            self.clear_record_form()
+            for column, text in enumerate(("Field", "Result", "Warnings")):
+                self.form_layout.addWidget(QtWidgets.QLabel(f"<b>{text}</b>"), 0, column)
+            first_control = None
+            for row_number, (name, value, warnings, editable) in enumerate(rows, 1):
+                field_label = name.replace("_", " ").replace(".", " ")
+                label = QtWidgets.QLabel(field_label)
+                self.form_layout.addWidget(label, row_number, 0)
+                if name in EVENT_SELECTIONS:
+                    control = QtWidgets.QPushButton(value)
+                    control.clicked.connect(
+                        lambda checked=False, field=name: self.edit_event_selection(field))
+                elif editable and name == "description":
+                    control = QtWidgets.QPlainTextEdit(value)
+                    control.setMaximumHeight(90)
+                elif editable:
+                    control = QtWidgets.QLineEdit(value)
+                    control.editingFinished.connect(
+                        lambda field=name, edit=control: self.save_field_control(field, edit.text()))
+                else:
+                    control = QtWidgets.QLineEdit(value)
+                    control.setReadOnly(True)
+                control.setProperty("fieldName", name)
+                control.setAccessibleName(field_label)
+                control.setAccessibleDescription(
+                    (f"Edit {field_label}. Changes save automatically."
+                     if editable or name in EVENT_SELECTIONS else f"Read-only {field_label}."))
+                control.installEventFilter(self)
+                label.setBuddy(control)
+                self.form_layout.addWidget(control, row_number, 1)
+                warning = QtWidgets.QLabel(warnings)
+                warning.setWordWrap(True)
+                warning.setToolTip(warnings)
+                warning.setAccessibleName(f"{field_label} warnings")
+                self.form_layout.addWidget(warning, row_number, 2)
+                self.field_controls[name] = control
+                first_control = first_control or control
+            controls = list(self.field_controls.values())
+            for current, following in zip(controls, controls[1:]):
+                self.setTabOrder(current, following)
+            if previous in self.field_controls:
+                self.focused_field_name = previous
+            elif first_control is not None:
+                self.focused_field_name = str(first_control.property("fieldName"))
+
+        def save_field_control(self, field_name, value):
+            if self.record is None or field_name in EVENT_SELECTIONS:
                 return
-            field_name = item.data(QtCore.Qt.ItemDataRole.UserRole)
-            if not field_name:
-                return
-            if field_name in EVENT_SELECTIONS:
+            field = self.record.get("fields", {}).get(field_name)
+            current = "" if field is None or display_value(field) is None else str(display_value(field))
+            if value == current:
                 return
             try:
                 roster_message = None
                 if (str(field_name).endswith(".unit_id")
                         and config.roster_path is not None):
                     canonical_name = apply_roster_linked_unit_edit(
-                        self.record, str(field_name), item.text(),
+                        self.record, str(field_name), value,
                         config.roster_path, Path.cwd())
                     if canonical_name is not None:
                         roster_message = f"roster set name to {canonical_name}"
                 elif (str(field_name).endswith(".print_name")
                       and config.roster_path is not None):
-                    apply_gui_edit(self.record, str(field_name), item.text())
+                    apply_gui_edit(self.record, str(field_name), value)
                     roster_unit = populate_unit_from_roster_name(
-                        self.record, str(field_name), item.text(),
+                        self.record, str(field_name), value,
                         config.roster_path, Path.cwd())
                     if roster_unit is not None:
                         roster_message = f"roster set Unit ID to {roster_unit}"
                 else:
-                    apply_gui_edit(self.record, str(field_name), item.text())
+                    apply_gui_edit(self.record, str(field_name), value)
                 automatic_export(self.record, args.export_dir)
                 self.persist_state()
                 self.display_record(self.record)
@@ -759,12 +849,11 @@ def main(argv=None) -> int:
             except (OSError, ValueError) as exc:
                 QtWidgets.QMessageBox.critical(self, "Unable to save correction", str(exc))
 
-        def summary_activated(self, row, column):
-            item = self.table.item(row, 1)
-            selection_name = (item.data(QtCore.Qt.ItemDataRole.UserRole)
-                              if item is not None else None)
+        def edit_event_selection(self, selection_name):
             if self.record is None or selection_name not in EVENT_SELECTIONS:
                 return
+            self.focused_field_name = selection_name
+            self.update_selection_buttons()
             event = self.record.get("event", {})
             labels, _, _ = EVENT_SELECTIONS[selection_name]
             selected = set(effective_event_selection(event, selection_name) or ())

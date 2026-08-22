@@ -21,11 +21,32 @@ from fd_training_ocr.gui_controller import (GuiPaths, accept_stage3_suggestion, 
                                              stage3_suggestion,
                                              alignment_fallback_record,
                                              roster_table_rows, save_roster_table,
+                                             roster_linked_attendee_values,
                                              validate_pdf, validate_pdfs)
 
 
 
 class GuiControllerTests(unittest.TestCase):
+    def test_add_attendee_roster_linking_is_bidirectional_and_preserves_unknowns(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            roster = root / "roster.json"
+            repository = root / "repository"
+            repository.mkdir()
+            roster.write_text(json.dumps({"schema_version": 1, "members": [{
+                "name": "Samantha Gibson", "unit_ids": ["7554"],
+                "aliases": ["Sam Gibson"]
+            }]}), encoding="utf-8")
+            self.assertEqual(
+                roster_linked_attendee_values("7554", "wrong", roster, repository, "unit_id"),
+                ("7554", "Samantha Gibson"))
+            self.assertEqual(
+                roster_linked_attendee_values("", "Sam Gibson", roster, repository, "print_name"),
+                ("7554", "Samantha Gibson"))
+            self.assertEqual(
+                roster_linked_attendee_values("9999", "Manual Name", roster, repository, "unit_id"),
+                ("9999", "Manual Name"))
+
     def test_pdf_validation_rejects_non_pdf(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "form.txt"; path.write_text("x")
