@@ -1,6 +1,7 @@
 import unittest
 
-from fd_training_ocr.fireworks import fireworks_staff_ids, formatted_fireworks_request
+from fd_training_ocr.fireworks import (displayed_fireworks_request, fireworks_staff_ids,
+                                       formatted_fireworks_request, save_fireworks_request_edit)
 from fd_training_ocr.validation import Roster, RosterMember
 
 
@@ -37,6 +38,31 @@ class FireworksRequestTests(unittest.TestCase):
         staff_ids, unresolved = fireworks_staff_ids(record, roster)
         self.assertEqual(staff_ids, (20, 26))
         self.assertEqual(unresolved, ("Unknown Person",))
+
+    def test_formatted_request_edits_and_invalid_drafts_are_persistent(self):
+        record = {}
+        valid, error = save_fireworks_request_edit(
+            record, '{"assignTitle":"Reviewed","staff":[20]}',
+            "2026-09-19T12:00:00+00:00")
+        self.assertTrue(valid)
+        self.assertIsNone(error)
+        text, source = displayed_fireworks_request(record, {"staff": []})
+        self.assertEqual(source, "reviewed")
+        self.assertIn('"assignTitle": "Reviewed"', text)
+
+        valid, error = save_fireworks_request_edit(
+            record, '{"assignTitle":', "2026-09-19T12:01:00+00:00")
+        self.assertFalse(valid)
+        self.assertIn("Invalid JSON", error)
+        text, source = displayed_fireworks_request(record, {"staff": []})
+        self.assertEqual((text, source), ('{"assignTitle":', "draft"))
+
+    def test_formatted_request_requires_numeric_staff_ids(self):
+        record = {}
+        valid, error = save_fireworks_request_edit(
+            record, '{"staff":["JR7454"]}', "2026-09-19T12:00:00+00:00")
+        self.assertFalse(valid)
+        self.assertIn("numeric Fireworks IDs", error)
 
 
 if __name__ == "__main__":

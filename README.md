@@ -105,9 +105,11 @@ Attendee dialog links exact roster Unit IDs to canonical names and unique roster
 aliases back to Unit IDs. OCR runs in a background executor while all Qt work remains on
 the main thread, and a prominent banner identifies records requiring human review. Edits
 are stored as separate reviewed values without replacing machine evidence. A third,
-read-only **Formatted Request** tab renders the reviewed record as a Fireworks `addActivity`
+editable **Formatted Request** tab renders the reviewed record as a Fireworks `addActivity`
 payload. It derives the title/instructions, dates, times, total hours, and `staff` IDs; a
-warning names every attendee that lacks an exact external-roster Fireworks ID. Results are
+warning names every attendee that lacks an exact external-roster Fireworks ID. Valid JSON
+edits autosave into the record. Invalid JSON is retained as a recoverable draft, and
+**Regenerate from Structured Results** deliberately discards manual request edits. Results are
 automatically written to the configured export folder after processing, after edits, when
 moving with Previous/Next, and when closing the GUI; no separate export action is required.
 At startup the GUI snapshots exported JSON, roster, queue state, and configuration into an

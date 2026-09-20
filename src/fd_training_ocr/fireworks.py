@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from html import escape
+import json
 from typing import Any, Mapping
 
 
@@ -44,6 +45,42 @@ def fireworks_staff_ids(record: Mapping[str, Any], roster: Any) -> tuple[tuple[i
         if member.fireworks_staff_id not in resolved:
             resolved.append(member.fireworks_staff_id)
     return tuple(resolved), tuple(unresolved)
+
+
+def save_fireworks_request_edit(record: dict[str, Any], text: str,
+                                reviewed_at: str) -> tuple[bool, str | None]:
+    """Persist valid request JSON or retain invalid text as a recoverable draft."""
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        record["fireworks_request_draft"] = text
+        return False, f"Invalid JSON at line {exc.lineno}, column {exc.colno}: {exc.msg}"
+    if not isinstance(payload, dict):
+        record["fireworks_request_draft"] = text
+        return False, "Formatted Request must be a JSON object"
+    staff = payload.get("staff")
+    if (not isinstance(staff, list)
+            or any(isinstance(item, bool) or not isinstance(item, int) for item in staff)):
+        record["fireworks_request_draft"] = text
+        return False, "Formatted Request staff must be an array of numeric Fireworks IDs"
+    record["fireworks_request_review"] = {
+        "payload": payload,
+        "reviewed_at": reviewed_at,
+    }
+    record.pop("fireworks_request_draft", None)
+    return True, None
+
+
+def displayed_fireworks_request(
+        record: Mapping[str, Any], generated: Mapping[str, Any]) -> tuple[str, str]:
+    """Return persisted editor text and its source: draft, reviewed, or generated."""
+    draft = record.get("fireworks_request_draft")
+    if isinstance(draft, str):
+        return draft, "draft"
+    review = record.get("fireworks_request_review")
+    if isinstance(review, Mapping) and isinstance(review.get("payload"), Mapping):
+        return json.dumps(review["payload"], indent=2, ensure_ascii=False), "reviewed"
+    return json.dumps(dict(generated), indent=2, ensure_ascii=False), "generated"
 
 
 def formatted_fireworks_request(

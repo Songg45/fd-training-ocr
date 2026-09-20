@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import Future, ThreadPoolExecutor
+from datetime import datetime, timezone
 from html import unescape
 import json
 from pathlib import Path
@@ -28,7 +29,8 @@ from .gui_controller import (EVENT_SELECTIONS, GuiPaths, accept_stage3_suggestio
                              stage3_suggestion, unprocessed_sources,
                              validate_pdfs, alignment_fallback_record)
 from .pdf_render import render_pdf
-from .fireworks import formatted_fireworks_request, fireworks_staff_ids
+from .fireworks import (displayed_fireworks_request, formatted_fireworks_request,
+                        fireworks_staff_ids, save_fireworks_request_edit)
 from .validation import load_roster
 
 
@@ -217,13 +219,32 @@ def main(argv=None) -> int:
             self.formatted_request_warning.setStyleSheet(
                 "background:#8b5a00;color:white;font-weight:bold;padding:6px;")
             self.formatted_request = QtWidgets.QPlainTextEdit()
-            self.formatted_request.setReadOnly(True)
             self.formatted_request.setAccessibleName("Formatted Fireworks Request")
             self.formatted_request.setAccessibleDescription(
-                "Read-only Fireworks addActivity JSON generated from the reviewed record")
+                "Editable Fireworks addActivity JSON. Valid edits save automatically.")
+            formatted_controls = QtWidgets.QHBoxLayout()
+            self.save_formatted_request_button = QtWidgets.QPushButton(
+                "Save Formatted Request")
+            self.regenerate_formatted_request_button = QtWidgets.QPushButton(
+                "Regenerate from Structured Results")
+            formatted_controls.addWidget(self.save_formatted_request_button)
+            formatted_controls.addWidget(self.regenerate_formatted_request_button)
+            formatted_controls.addStretch(1)
             formatted_layout.addWidget(self.formatted_request_warning)
+            formatted_layout.addLayout(formatted_controls)
             formatted_layout.addWidget(self.formatted_request, 1)
             tabs.addTab(formatted_widget, "Formatted Request")
+            self.setting_formatted_request = False
+            self.formatted_request_dirty = False
+            self.formatted_request_timer = QtCore.QTimer(self)
+            self.formatted_request_timer.setSingleShot(True)
+            self.formatted_request_timer.setInterval(750)
+            self.formatted_request_timer.timeout.connect(self.save_formatted_request)
+            self.formatted_request.textChanged.connect(self.formatted_request_edited)
+            self.save_formatted_request_button.clicked.connect(
+                lambda: self.save_formatted_request(show_confirmation=True))
+            self.regenerate_formatted_request_button.clicked.connect(
+                self.regenerate_formatted_request)
             self.load_button.triggered.connect(self.load_pdfs)
             self.folder_button.triggered.connect(self.load_folder)
             self.roster_button.triggered.connect(self.show_roster)
@@ -445,6 +466,7 @@ def main(argv=None) -> int:
         def navigate_to(self, target):
             try:
                 if self.record is not None:
+                    self.save_formatted_request()
                     automatic_export(self.record, args.export_dir)
                 self.current_index = target
                 self.show_current()
@@ -465,6 +487,8 @@ def main(argv=None) -> int:
         def remove_current_pdf(self):
             if self.busy or not (0 <= self.current_index < len(self.sources)):
                 return
+            if self.record is not None:
+                self.save_formatted_request()
             source = self.sources.pop(self.current_index)
             self.records.pop(source, None)
             self.failures.pop(source, None)
@@ -478,6 +502,11 @@ def main(argv=None) -> int:
                 self.record = None
                 self.preview.scene().clear()
                 self.raw.clear()
+                self.setting_formatted_request = True
+                self.formatted_request.clear()
+                self.setting_formatted_request = False
+                self.formatted_request_dirty = False
+                self.set_formatted_request_message("")
                 self.clear_record_form()
                 self.warning.hide()
                 self.status.setText("Queue empty — load a PDF to begin")
@@ -487,6 +516,8 @@ def main(argv=None) -> int:
         def remove_all_pdfs(self):
             if self.busy or not self.sources:
                 return
+            if self.record is not None:
+                self.save_formatted_request()
             answer = QtWidgets.QMessageBox.question(
                 self, "Remove all PDFs",
                 f"Remove all {len(self.sources)} PDFs from the GUI queue?\n\n"
@@ -502,6 +533,11 @@ def main(argv=None) -> int:
             self.record = None
             self.preview.scene().clear()
             self.raw.clear()
+            self.setting_formatted_request = True
+            self.formatted_request.clear()
+            self.setting_formatted_request = False
+            self.formatted_request_dirty = False
+            self.set_formatted_request_message("")
             self.clear_record_form()
             self.warning.hide()
             self.status.setText("Queue cleared — source PDFs and exports were preserved")
@@ -520,6 +556,11 @@ def main(argv=None) -> int:
             self.record = self.records.get(self.source)
             if self.record is None:
                 self.raw.clear(); self.clear_record_form()
+                self.setting_formatted_request = True
+                self.formatted_request.clear()
+                self.setting_formatted_request = False
+                self.formatted_request_dirty = False
+                self.set_formatted_request_message("")
                 failure = self.failures.get(self.source)
                 if failure:
                     self.warning.setText(f"PROCESSING FAILED — {failure}")
@@ -825,8 +866,7 @@ def main(argv=None) -> int:
                 self.set_busy(False)
                 self.status.setText(f"Complete — exported {exported.name}")
 
-        def display_record(self, record):
-            self.raw.setPlainText(json.dumps(record, indent=2, ensure_ascii=False))
+        def generated_fireworks_request(self, record):
             staff_ids, unresolved_staff = (), tuple(
                 str(item.get("print_name") or item.get("unit_id") or "unknown attendee")
                 for item in record.get("attendees", ()) if isinstance(item, dict))
@@ -836,13 +876,106 @@ def main(argv=None) -> int:
                     staff_ids, unresolved_staff = fireworks_staff_ids(record, roster)
             except (OSError, ValueError):
                 pass
-            self.formatted_request.setPlainText(json.dumps(
-                formatted_fireworks_request(record, staff_ids),
-                indent=2, ensure_ascii=False))
-            warning = ("Fireworks Staff ID unresolved for: " + ", ".join(unresolved_staff)
-                       if unresolved_staff else "All attendees mapped to Fireworks Staff IDs")
-            self.formatted_request_warning.setText(warning)
-            self.formatted_request_warning.setVisible(bool(unresolved_staff))
+            return formatted_fireworks_request(record, staff_ids), unresolved_staff
+
+        def set_formatted_request_message(self, message, color="#8b5a00"):
+            self.formatted_request_warning.setText(message)
+            self.formatted_request_warning.setStyleSheet(
+                f"background:{color};color:white;font-weight:bold;padding:6px;")
+            self.formatted_request_warning.setVisible(bool(message))
+
+        def formatted_request_edited(self):
+            if not self.setting_formatted_request and self.record is not None:
+                self.formatted_request_dirty = True
+                self.formatted_request_timer.start()
+
+        def save_formatted_request(self, show_confirmation=False):
+            if self.setting_formatted_request or self.record is None:
+                return True
+            if not self.formatted_request_dirty and not show_confirmation:
+                return True
+            self.formatted_request_timer.stop()
+            valid, error = save_fireworks_request_edit(
+                self.record, self.formatted_request.toPlainText(),
+                datetime.now(timezone.utc).isoformat())
+            try:
+                automatic_export(self.record, args.export_dir)
+                self.persist_state()
+                self.raw.setPlainText(json.dumps(
+                    self.record, indent=2, ensure_ascii=False))
+            except OSError as exc:
+                self.set_formatted_request_message(
+                    f"Unable to save Formatted Request: {exc}", "#8b1e1e")
+                return False
+            self.formatted_request_dirty = False
+            if valid:
+                _payload, unresolved = self.generated_fireworks_request(self.record)
+                message = "Manual Formatted Request saved"
+                if unresolved:
+                    message += "; verify manually unresolved roster attendee(s): " + ", ".join(unresolved)
+                self.set_formatted_request_message(message, "#286428")
+                if show_confirmation:
+                    self.status.setText("Formatted Request saved; automatic export updated")
+            else:
+                self.set_formatted_request_message(
+                    f"UNSAVED AS REQUEST — draft preserved: {error}", "#8b1e1e")
+                if show_confirmation:
+                    QtWidgets.QMessageBox.warning(
+                        self, "Invalid Formatted Request",
+                        f"The draft was preserved, but it is not valid request JSON.\n\n{error}")
+            return valid
+
+        def regenerate_formatted_request(self):
+            if self.record is None:
+                return
+            answer = QtWidgets.QMessageBox.question(
+                self, "Regenerate Formatted Request",
+                "Discard this record's manual Formatted Request edits and rebuild it "
+                "from Structured Results?")
+            if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+                return
+            self.formatted_request_timer.stop()
+            self.formatted_request_dirty = False
+            prior_review = self.record.get("fireworks_request_review")
+            prior_draft = self.record.get("fireworks_request_draft")
+            self.record.pop("fireworks_request_review", None)
+            self.record.pop("fireworks_request_draft", None)
+            try:
+                automatic_export(self.record, args.export_dir)
+                self.persist_state()
+                self.display_record(self.record)
+                self.status.setText(
+                    "Formatted Request regenerated from Structured Results")
+            except OSError as exc:
+                if prior_review is not None:
+                    self.record["fireworks_request_review"] = prior_review
+                if prior_draft is not None:
+                    self.record["fireworks_request_draft"] = prior_draft
+                QtWidgets.QMessageBox.critical(
+                    self, "Unable to regenerate Formatted Request", str(exc))
+
+        def display_record(self, record):
+            self.raw.setPlainText(json.dumps(record, indent=2, ensure_ascii=False))
+            generated, unresolved_staff = self.generated_fireworks_request(record)
+            request_text, request_source = displayed_fireworks_request(record, generated)
+            self.setting_formatted_request = True
+            self.formatted_request.setPlainText(request_text)
+            self.setting_formatted_request = False
+            self.formatted_request_dirty = False
+            if request_source == "draft":
+                self.set_formatted_request_message(
+                    "INVALID JSON DRAFT PRESERVED — correct it to save a request",
+                    "#8b1e1e")
+            elif request_source == "reviewed":
+                message = "Manual Formatted Request saved"
+                if unresolved_staff:
+                    message += "; verify manually unresolved roster attendee(s): " + ", ".join(unresolved_staff)
+                self.set_formatted_request_message(message, "#286428")
+            elif unresolved_staff:
+                self.set_formatted_request_message(
+                    "Fireworks Staff ID unresolved for: " + ", ".join(unresolved_staff))
+            else:
+                self.set_formatted_request_message("")
             self.build_record_form(structured_rows(record))
             needs_review = record.get("status") == "review_required"
             self.warning.setText("REVIEW REQUIRED — " + ("; ".join(record.get("warnings", ())) or "one or more fields require review"))
@@ -1029,6 +1162,7 @@ def main(argv=None) -> int:
                 event.ignore(); QtWidgets.QMessageBox.information(self, "Processing", "Wait for local OCR to finish before closing."); return
             if self.record is not None:
                 try:
+                    self.save_formatted_request()
                     automatic_export(self.record, args.export_dir)
                 except OSError as exc:
                     event.ignore()
