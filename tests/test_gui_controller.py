@@ -397,16 +397,24 @@ class GuiControllerTests(unittest.TestCase):
             state = root / "state.json"; state.write_text('{"state":1}')
             config = root / "config.toml"; config.write_text("[app]")
             roster = root / "roster.json"; roster.write_text('{"members":[]}')
+            fireworks_mappings = root / "fireworks-category-ids.json"
+            fireworks_mappings.write_text('{"schema_version":1}')
+            fireworks_ledger = root / "submissions.jsonl"
+            fireworks_ledger.write_text('{"status":"submitted"}\n')
             result = exports / "one.json"; result.write_text('{"value":1}')
             first = create_startup_backup(
                 backup_dir=backups, export_dir=exports, state_file=state,
-                config_file=config, roster_file=roster, keep=2,
+                config_file=config, roster_file=roster,
+                fireworks_mappings_file=fireworks_mappings,
+                fireworks_ledger_file=fireworks_ledger, keep=2,
                 snapshot_at=datetime(2026, 8, 20, 9, 30, 0))
             self.assertIsNotNone(first)
             self.assertEqual(first.parent.name, "08-20-2026")
             self.assertEqual(first.name, "09-30-00")
             self.assertEqual((first / "Exported" / "one.json").read_text(), '{"value":1}')
             self.assertTrue((first / "Configuration" / "config.toml").is_file())
+            self.assertTrue((first / "Fireworks" / "fireworks-category-ids.json").is_file())
+            self.assertTrue((first / "Fireworks" / "submissions.jsonl").is_file())
             second = create_startup_backup(
                 backup_dir=backups, export_dir=exports, state_file=state,
                 config_file=config, roster_file=roster, keep=2,

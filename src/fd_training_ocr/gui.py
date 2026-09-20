@@ -30,7 +30,14 @@ from .gui_controller import (EVENT_SELECTIONS, GuiPaths, accept_stage3_suggestio
                              validate_pdfs, alignment_fallback_record)
 from .pdf_render import render_pdf
 from .fireworks import (displayed_fireworks_request, formatted_fireworks_request,
-                        fireworks_staff_ids, save_fireworks_request_edit)
+                        fireworks_staff_ids, load_fireworks_mappings,
+                        save_fireworks_request_edit, selected_category_name,
+                        selected_location_name,
+                        update_payload_selection, validate_fireworks_payload)
+from .fireworks_client import (DuplicateSubmissionError, FireworksClient,
+                               FireworksConnectionError,
+                               FireworksSubmissionRejected,
+                               FireworksSubmissionUnknown, SubmissionLedger)
 from .validation import load_roster
 
 
@@ -54,6 +61,12 @@ def build_parser() -> argparse.ArgumentParser:
                         default=Path(r"C:\Temp\fd-training-ocr-gui-state.json"))
     parser.add_argument("--backup-dir", type=Path,
                         default=Path(r"C:\Temp\FDTrainingOCR-Backups"))
+    parser.add_argument("--fireworks-ids", type=Path,
+                        default=Path(r"C:\Temp\fireworks-category-ids.json"))
+    parser.add_argument("--fireworks-ledger", type=Path,
+                        default=Path(r"C:\Temp\FDTrainingOCR-Fireworks\submissions.jsonl"))
+    parser.add_argument("--fireworks-api-base",
+                        default="https://webtrainingapi.eprsys.com/api")
     return parser
 
 
@@ -63,12 +76,21 @@ def main(argv=None) -> int:
         config = load_config(args.config)
         paths = GuiPaths(args.master, args.template,
                          args.output_dir or config.output_dir / "gui", args.pdftoppm)
+        fireworks_mapping_warning = None
+        try:
+            fireworks_mappings = load_fireworks_mappings(args.fireworks_ids)
+        except (OSError, ValueError) as exc:
+            fireworks_mappings = None
+            fireworks_mapping_warning = str(exc)
+        fireworks_ledger = SubmissionLedger(args.fireworks_ledger)
         backup_warning = None
         try:
             create_startup_backup(
                 backup_dir=args.backup_dir, export_dir=args.export_dir,
                 state_file=args.state_file, config_file=args.config,
-                roster_file=config.roster_path)
+                roster_file=config.roster_path,
+                fireworks_mappings_file=args.fireworks_ids,
+                fireworks_ledger_file=args.fireworks_ledger)
         except (OSError, ValueError) as exc:
             backup_warning = str(exc)
         QtCore, QtGui, QtWidgets = _qt()
@@ -107,6 +129,10 @@ def main(argv=None) -> int:
             self.preview_temp = tempfile.TemporaryDirectory(prefix="fd-training-ocr-gui-")
             self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="fd-ocr")
             self.future: Future | None = None
+            self.fireworks_future: Future | None = None
+            self.fireworks_operation = None
+            self.fireworks_pending = None
+            self.fireworks_client = None
             self.processing_source = None
             self.batch_queue = []
             self.batch_total = 0
@@ -117,6 +143,9 @@ def main(argv=None) -> int:
             self.poll_timer = QtCore.QTimer(self)
             self.poll_timer.setInterval(100)
             self.poll_timer.timeout.connect(self.poll_result)
+            self.fireworks_timer = QtCore.QTimer(self)
+            self.fireworks_timer.setInterval(100)
+            self.fireworks_timer.timeout.connect(self.poll_fireworks_result)
             self.setWindowTitle("FD Training OCR")
             self.resize(1350, 850)
             central = QtWidgets.QWidget(); self.setCentralWidget(central)
@@ -214,6 +243,32 @@ def main(argv=None) -> int:
             tabs.addTab(self.raw, "Raw JSON")
             formatted_widget = QtWidgets.QWidget()
             formatted_layout = QtWidgets.QVBoxLayout(formatted_widget)
+            fireworks_fields = QtWidgets.QGridLayout()
+            self.fireworks_category = QtWidgets.QComboBox()
+            self.fireworks_category.setAccessibleName("Fireworks Category")
+            self.fireworks_category.addItem("Select category…", None)
+            self.fireworks_location = QtWidgets.QComboBox()
+            self.fireworks_location.setAccessibleName("Fireworks Location")
+            self.fireworks_location.addItem("Select location…", None)
+            if fireworks_mappings is not None:
+                for item in fireworks_mappings.categories:
+                    suffix = "" if item.status == "confirmed" else f" ({item.status})"
+                    self.fireworks_category.addItem(item.name + suffix, item.name)
+                for item in fireworks_mappings.locations:
+                    self.fireworks_location.addItem(item.name, item.name)
+                station_text = (
+                    f"{fireworks_mappings.station_name} "
+                    f"({fireworks_mappings.station_id})")
+            else:
+                station_text = "Mappings unavailable"
+            self.fireworks_station = QtWidgets.QLabel(station_text)
+            self.fireworks_station.setAccessibleName("Fireworks Station")
+            fireworks_fields.addWidget(QtWidgets.QLabel("Category"), 0, 0)
+            fireworks_fields.addWidget(self.fireworks_category, 0, 1)
+            fireworks_fields.addWidget(QtWidgets.QLabel("Class Location"), 1, 0)
+            fireworks_fields.addWidget(self.fireworks_location, 1, 1)
+            fireworks_fields.addWidget(QtWidgets.QLabel("Station"), 2, 0)
+            fireworks_fields.addWidget(self.fireworks_station, 2, 1)
             self.formatted_request_warning = QtWidgets.QLabel("")
             self.formatted_request_warning.setWordWrap(True)
             self.formatted_request_warning.setStyleSheet(
@@ -227,14 +282,29 @@ def main(argv=None) -> int:
                 "Save Formatted Request")
             self.regenerate_formatted_request_button = QtWidgets.QPushButton(
                 "Regenerate from Structured Results")
+            self.connect_fireworks_button = QtWidgets.QPushButton("Connect to Fireworks")
+            self.connect_fireworks_button.setAccessibleName("Connect to Fireworks")
+            self.submit_fireworks_button = QtWidgets.QPushButton("Submit to Fireworks")
+            self.submit_fireworks_button.setAccessibleName("Submit to Fireworks")
+            self.fireworks_connection_status = QtWidgets.QLabel("Not connected")
             formatted_controls.addWidget(self.save_formatted_request_button)
             formatted_controls.addWidget(self.regenerate_formatted_request_button)
+            formatted_controls.addWidget(self.connect_fireworks_button)
+            formatted_controls.addWidget(self.submit_fireworks_button)
+            formatted_controls.addWidget(self.fireworks_connection_status)
             formatted_controls.addStretch(1)
+            formatted_layout.addLayout(fireworks_fields)
             formatted_layout.addWidget(self.formatted_request_warning)
+            exact_payload_label = QtWidgets.QLabel(
+                "Exact JSON payload that will be sent by Submit to Fireworks")
+            exact_payload_label.setAccessibleName("Exact Fireworks JSON payload")
+            formatted_layout.addWidget(exact_payload_label)
             formatted_layout.addLayout(formatted_controls)
             formatted_layout.addWidget(self.formatted_request, 1)
             tabs.addTab(formatted_widget, "Formatted Request")
             self.setting_formatted_request = False
+            self.setting_fireworks_controls = False
+            self.fireworks_control_values = (None, None)
             self.formatted_request_dirty = False
             self.formatted_request_timer = QtCore.QTimer(self)
             self.formatted_request_timer.setSingleShot(True)
@@ -245,6 +315,12 @@ def main(argv=None) -> int:
                 lambda: self.save_formatted_request(show_confirmation=True))
             self.regenerate_formatted_request_button.clicked.connect(
                 self.regenerate_formatted_request)
+            self.fireworks_category.currentIndexChanged.connect(
+                self.fireworks_selector_changed)
+            self.fireworks_location.currentIndexChanged.connect(
+                self.fireworks_selector_changed)
+            self.connect_fireworks_button.clicked.connect(self.connect_to_fireworks)
+            self.submit_fireworks_button.clicked.connect(self.submit_to_fireworks)
             self.load_button.triggered.connect(self.load_pdfs)
             self.folder_button.triggered.connect(self.load_folder)
             self.roster_button.triggered.connect(self.show_roster)
@@ -507,6 +583,7 @@ def main(argv=None) -> int:
                 self.setting_formatted_request = False
                 self.formatted_request_dirty = False
                 self.set_formatted_request_message("")
+                self.sync_fireworks_controls({})
                 self.clear_record_form()
                 self.warning.hide()
                 self.status.setText("Queue empty — load a PDF to begin")
@@ -538,6 +615,7 @@ def main(argv=None) -> int:
             self.setting_formatted_request = False
             self.formatted_request_dirty = False
             self.set_formatted_request_message("")
+            self.sync_fireworks_controls({})
             self.clear_record_form()
             self.warning.hide()
             self.status.setText("Queue cleared — source PDFs and exports were preserved")
@@ -561,6 +639,7 @@ def main(argv=None) -> int:
                 self.setting_formatted_request = False
                 self.formatted_request_dirty = False
                 self.set_formatted_request_message("")
+                self.sync_fireworks_controls({})
                 failure = self.failures.get(self.source)
                 if failure:
                     self.warning.setText(f"PROCESSING FAILED — {failure}")
@@ -576,26 +655,28 @@ def main(argv=None) -> int:
         def update_navigation(self):
             count = len(self.sources)
             position = self.current_index + 1 if count else 0
+            idle = not self.busy and self.fireworks_future is None
             self.page_label.setText(f"{position} of {count}" +
                                     (f" — {self.source.name}" if self.source else ""))
-            self.previous_button.setEnabled(not self.busy and self.current_index > 0)
-            self.next_button.setEnabled(not self.busy and 0 <= self.current_index < count - 1)
+            self.previous_button.setEnabled(idle and self.current_index > 0)
+            self.next_button.setEnabled(idle and 0 <= self.current_index < count - 1)
             self.goto_number.setRange(1, max(1, count))
             if count:
                 self.goto_number.setValue(self.current_index + 1)
-            self.goto_number.setEnabled(not self.busy and count > 0)
-            self.goto_button.setEnabled(not self.busy and count > 0)
-            self.remove_button.setEnabled(not self.busy and self.source is not None)
-            self.remove_all_button.setEnabled(not self.busy and bool(self.sources))
-            self.process_button.setEnabled(not self.busy and self.source is not None)
+            self.goto_number.setEnabled(idle and count > 0)
+            self.goto_button.setEnabled(idle and count > 0)
+            self.remove_button.setEnabled(idle and self.source is not None)
+            self.remove_all_button.setEnabled(idle and bool(self.sources))
+            self.process_button.setEnabled(idle and self.source is not None)
             self.process_all_button.setEnabled(
-                not self.busy and bool(unprocessed_sources(self.sources, self.records)))
+                idle and bool(unprocessed_sources(self.sources, self.records)))
             self.stop_button.setEnabled(
                 self.busy and self.batch_total > 0 and not self.stop_requested)
-            self.add_attendee_button.setEnabled(not self.busy and self.record is not None)
-            self.add_attendee_voice_button.setEnabled(not self.busy and self.record is not None)
+            self.add_attendee_button.setEnabled(idle and self.record is not None)
+            self.add_attendee_voice_button.setEnabled(idle and self.record is not None)
             self.update_selection_buttons()
             self.update_menu_buttons()
+            self.update_fireworks_buttons()
 
         def update_menu_buttons(self):
             groups = (
@@ -711,7 +792,8 @@ def main(argv=None) -> int:
             return attendee_row_from_field(self.focused_field_name or "")
 
         def update_attendee_button(self):
-            enabled = (not self.busy and self.record is not None
+            enabled = (not self.busy and self.fireworks_future is None
+                       and self.record is not None
                        and self.selected_attendee_row() is not None)
             self.delete_attendee_button.setEnabled(enabled)
             self.delete_attendee_voice_button.setEnabled(enabled)
@@ -724,7 +806,9 @@ def main(argv=None) -> int:
             field_name = self.selected_field_name()
             suggestion = (stage3_suggestion(self.record, field_name)
                           if self.record is not None and field_name else None)
-            self.accept_stage3_button.setEnabled(not self.busy and suggestion is not None)
+            self.accept_stage3_button.setEnabled(
+                not self.busy and self.fireworks_future is None
+                and suggestion is not None)
             self.update_menu_buttons()
 
         def accept_selected_stage3(self):
@@ -870,19 +954,326 @@ def main(argv=None) -> int:
             staff_ids, unresolved_staff = (), tuple(
                 str(item.get("print_name") or item.get("unit_id") or "unknown attendee")
                 for item in record.get("attendees", ()) if isinstance(item, dict))
+            instructor_field = record.get("fields", {}).get("instructor", {})
+            instructor = (display_value(instructor_field)
+                          if isinstance(instructor_field, dict) else None)
+            if instructor not in (None, ""):
+                unresolved_staff += (f"Instructor: {instructor}",)
             try:
                 if config.roster_path is not None:
                     roster = load_roster(config.roster_path, Path.cwd())
                     staff_ids, unresolved_staff = fireworks_staff_ids(record, roster)
             except (OSError, ValueError):
                 pass
-            return formatted_fireworks_request(record, staff_ids), unresolved_staff
+            category = (fireworks_mappings.category_named(selected_category_name(record))
+                        if fireworks_mappings is not None else None)
+            location = (fireworks_mappings.location_named(selected_location_name(record))
+                        if fireworks_mappings is not None else None)
+            station_id = fireworks_mappings.station_id if fireworks_mappings is not None else 54
+            return formatted_fireworks_request(
+                record, staff_ids, category=category, location=location,
+                station_id=station_id), unresolved_staff
 
         def set_formatted_request_message(self, message, color="#8b5a00"):
             self.formatted_request_warning.setText(message)
             self.formatted_request_warning.setStyleSheet(
                 f"background:{color};color:white;font-weight:bold;padding:6px;")
             self.formatted_request_warning.setVisible(bool(message))
+
+        def sync_fireworks_controls(self, payload):
+            category_name = None
+            location_name = None
+            if fireworks_mappings is not None and isinstance(payload, dict):
+                category = fireworks_mappings.category_with_id(payload.get("assignCat"))
+                location = fireworks_mappings.location_with_id(payload.get("location"))
+                category_name = category.name if category is not None else None
+                location_name = location.name if location is not None else None
+            self.setting_fireworks_controls = True
+            self.fireworks_category.setCurrentIndex(
+                max(0, self.fireworks_category.findData(category_name)))
+            self.fireworks_location.setCurrentIndex(
+                max(0, self.fireworks_location.findData(location_name)))
+            self.setting_fireworks_controls = False
+            self.fireworks_control_values = (category_name, location_name)
+
+        def restore_fireworks_controls(self):
+            category_name, location_name = self.fireworks_control_values
+            self.setting_fireworks_controls = True
+            self.fireworks_category.setCurrentIndex(
+                max(0, self.fireworks_category.findData(category_name)))
+            self.fireworks_location.setCurrentIndex(
+                max(0, self.fireworks_location.findData(location_name)))
+            self.setting_fireworks_controls = False
+
+        def fireworks_selector_changed(self):
+            if (self.setting_fireworks_controls or self.setting_formatted_request
+                    or self.record is None or fireworks_mappings is None):
+                return
+            try:
+                payload = json.loads(self.formatted_request.toPlainText())
+                if not isinstance(payload, dict):
+                    raise ValueError("Formatted Request must be a JSON object")
+            except (json.JSONDecodeError, ValueError) as exc:
+                self.restore_fireworks_controls()
+                QtWidgets.QMessageBox.warning(
+                    self, "Invalid Formatted Request",
+                    "Correct the visible JSON before changing its Fireworks dropdowns.\n\n"
+                    + str(exc))
+                return
+
+            category_name = self.fireworks_category.currentData()
+            location_name = self.fireworks_location.currentData()
+            try:
+                if category_name is None:
+                    payload["assignCat"] = None
+                else:
+                    update_payload_selection(
+                        payload, fireworks_mappings, category_name=category_name)
+                if location_name is None:
+                    payload["location"] = None
+                    payload["locationstr"] = None
+                    fields = payload.get("locationFlds")
+                    if not isinstance(fields, dict):
+                        fields = {}
+                        payload["locationFlds"] = fields
+                    fields["moneln"] = None
+                    fields["desc"] = None
+                    fields["upsize_ts"] = None
+                else:
+                    update_payload_selection(
+                        payload, fireworks_mappings, location_name=location_name)
+                payload["station"] = fireworks_mappings.station_id
+                selection = self.record.setdefault("fireworks_selection", {})
+                if not isinstance(selection, dict):
+                    selection = {}
+                    self.record["fireworks_selection"] = selection
+                selection["category"] = category_name or ""
+                selection["location"] = location_name or ""
+                self.fireworks_control_values = (category_name, location_name)
+                self.setting_formatted_request = True
+                self.formatted_request.setPlainText(
+                    json.dumps(payload, indent=2, ensure_ascii=False))
+                self.setting_formatted_request = False
+                self.formatted_request_dirty = True
+                self.save_formatted_request()
+                self.status.setText(
+                    "Updated the visible Fireworks JSON from the dropdown selection")
+            except (OSError, ValueError) as exc:
+                self.restore_fireworks_controls()
+                QtWidgets.QMessageBox.critical(
+                    self, "Unable to update Fireworks request", str(exc))
+
+        def update_fireworks_buttons(self):
+            active = self.fireworks_future is not None
+            idle = not self.busy and not active
+            submission = (self.record.get("fireworks_submission", {})
+                          if isinstance(self.record, dict) else {})
+            locked = (isinstance(submission, dict)
+                      and submission.get("status") in {"submitted", "unknown"})
+            mappings_ready = fireworks_mappings is not None
+            self.fireworks_category.setEnabled(
+                idle and self.record is not None and mappings_ready and not locked)
+            self.fireworks_location.setEnabled(
+                idle and self.record is not None and mappings_ready and not locked)
+            self.connect_fireworks_button.setEnabled(idle)
+            self.submit_fireworks_button.setEnabled(
+                idle and self.record is not None and mappings_ready and not locked
+                and self.fireworks_client is not None
+                and self.fireworks_client.connected)
+            self.save_formatted_request_button.setEnabled(
+                idle and self.record is not None and not locked)
+            self.regenerate_formatted_request_button.setEnabled(
+                idle and self.record is not None and not locked)
+            self.formatted_request.setReadOnly(
+                self.record is None or locked or active)
+
+        def connect_to_fireworks(self):
+            if self.fireworks_future is not None:
+                return
+            token, accepted = QtWidgets.QInputDialog.getText(
+                self, "Connect to Fireworks",
+                "Paste the current Fireworks bearer token. It is kept only in memory "
+                "and discarded when this application closes.",
+                QtWidgets.QLineEdit.EchoMode.Password)
+            if not accepted:
+                return
+            try:
+                client = FireworksClient(
+                    token, base_url=args.fireworks_api_base)
+            except ValueError as exc:
+                QtWidgets.QMessageBox.warning(
+                    self, "Unable to connect to Fireworks", str(exc))
+                return
+            if self.fireworks_client is not None:
+                self.fireworks_client.clear_token()
+            self.fireworks_client = client
+            self.fireworks_operation = "connect"
+            self.fireworks_pending = None
+            self.fireworks_connection_status.setText("Validating…")
+            self.fireworks_future = self.executor.submit(client.validate_connection)
+            self.fireworks_timer.start()
+            self.update_navigation()
+
+        def visible_fireworks_payload(self):
+            try:
+                payload = json.loads(self.formatted_request.toPlainText())
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"Invalid JSON at line {exc.lineno}, column {exc.colno}: {exc.msg}") from exc
+            if not isinstance(payload, dict):
+                raise ValueError("Formatted Request must be a JSON object")
+            return payload
+
+        def submit_to_fireworks(self):
+            if (self.record is None or fireworks_mappings is None
+                    or self.fireworks_client is None
+                    or not self.fireworks_client.connected
+                    or self.fireworks_future is not None):
+                return
+            if not self.save_formatted_request(show_confirmation=False):
+                return
+            try:
+                payload = self.visible_fireworks_payload()
+                _generated, unresolved = self.generated_fireworks_request(self.record)
+                errors = validate_fireworks_payload(
+                    payload, fireworks_mappings, unresolved)
+                if errors:
+                    raise ValueError("\n".join(f"• {error}" for error in errors))
+                submission = self.record.get("fireworks_submission", {})
+                if (isinstance(submission, dict)
+                        and submission.get("status") in {"submitted", "unknown"}):
+                    raise DuplicateSubmissionError(
+                        f"This record is already marked {submission.get('status')}")
+                fireworks_ledger.assert_may_submit(self.record, payload)
+            except (OSError, ValueError, DuplicateSubmissionError) as exc:
+                QtWidgets.QMessageBox.warning(
+                    self, "Fireworks request is not ready", str(exc))
+                return
+
+            category = fireworks_mappings.category_with_id(payload.get("assignCat"))
+            location = fireworks_mappings.location_with_id(payload.get("location"))
+            answer = QtWidgets.QMessageBox.question(
+                self, "Submit one Fireworks activity",
+                "Fireworks will receive exactly the JSON currently visible in the "
+                "Formatted Request tab as one POST. It will not be retried "
+                "automatically if the outcome is uncertain.\n\n"
+                f"Title: {payload.get('assignTitle')}\n"
+                f"Start: {payload.get('startDt')}\n"
+                f"End: {payload.get('endDt')}\n"
+                f"Category: {category.name if category else payload.get('assignCat')}\n"
+                f"Location: {location.name if location else payload.get('location')}\n"
+                f"Station: {fireworks_mappings.station_name} "
+                f"({fireworks_mappings.station_id})\n"
+                f"Participants: {len(payload.get('staff', []))}\n\n"
+                "Submit this reviewed record now?")
+            if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+                return
+
+            self.fireworks_operation = "submit"
+            self.fireworks_pending = {
+                "record": self.record,
+                "source": self.source,
+                "payload": payload,
+            }
+            self.fireworks_connection_status.setText("Submitting one request…")
+            self.fireworks_future = self.executor.submit(
+                self.fireworks_client.post_activity, payload)
+            self.fireworks_timer.start()
+            self.update_navigation()
+
+        def persist_fireworks_outcome(
+                self, status, payload, *, response=None, error=None):
+            entry = fireworks_ledger.append(
+                record=self.record, payload=payload, status=status,
+                response=response, error=error)
+            self.record["fireworks_submission"] = {
+                "status": status,
+                "recorded_at": entry["recorded_at"],
+                "payload_sha256": entry["payload_sha256"],
+                "activity_id": entry["activity_id"],
+                "error": error,
+            }
+            automatic_export(self.record, args.export_dir)
+            self.persist_state()
+            return entry
+
+        def poll_fireworks_result(self):
+            if self.fireworks_future is None or not self.fireworks_future.done():
+                return
+            self.fireworks_timer.stop()
+            future, operation = self.fireworks_future, self.fireworks_operation
+            pending = self.fireworks_pending
+            self.fireworks_future = None
+            self.fireworks_operation = None
+            self.fireworks_pending = None
+            try:
+                result = future.result()
+                if operation == "connect":
+                    self.fireworks_connection_status.setText("Connected — token in memory")
+                    self.status.setText("Fireworks connection validated with one read-only lookup")
+                elif operation == "submit" and pending is not None:
+                    self.record = pending["record"]
+                    entry = self.persist_fireworks_outcome(
+                        "submitted", pending["payload"], response=result.payload)
+                    self.fireworks_connection_status.setText("Connected — activity submitted")
+                    self.display_record(self.record)
+                    activity = entry.get("activity_id")
+                    QtWidgets.QMessageBox.information(
+                        self, "Fireworks activity submitted",
+                        "Fireworks accepted the activity."
+                        + (f"\n\nActivity ID: {activity}" if activity else
+                           "\n\nNo activity ID was present in the response; the full receipt was recorded."))
+            except FireworksSubmissionUnknown as exc:
+                if pending is not None:
+                    self.record = pending["record"]
+                    try:
+                        self.persist_fireworks_outcome(
+                            "unknown", pending["payload"], error=str(exc))
+                    except OSError:
+                        self.record["fireworks_submission"] = {
+                            "status": "unknown", "error": str(exc)}
+                    self.display_record(self.record)
+                QtWidgets.QMessageBox.critical(
+                    self, "Fireworks outcome unknown",
+                    f"{exc}\n\nDo not submit this record again until Fireworks has been checked.")
+            except FireworksSubmissionRejected as exc:
+                if pending is not None:
+                    self.record = pending["record"]
+                    try:
+                        self.persist_fireworks_outcome(
+                            "rejected", pending["payload"], error=str(exc))
+                    except OSError:
+                        pass
+                    self.display_record(self.record)
+                QtWidgets.QMessageBox.warning(
+                    self, "Fireworks rejected the activity", str(exc))
+            except FireworksConnectionError as exc:
+                if self.fireworks_client is not None:
+                    self.fireworks_client.clear_token()
+                self.fireworks_client = None
+                self.fireworks_connection_status.setText("Not connected")
+                QtWidgets.QMessageBox.warning(
+                    self, "Unable to connect to Fireworks", str(exc))
+            except (OSError, ValueError) as exc:
+                if operation == "submit" and pending is not None:
+                    self.record = pending["record"]
+                    self.record["fireworks_submission"] = {
+                        "status": "unknown",
+                        "error": (
+                            "Fireworks responded, but the local receipt could not be "
+                            "recorded: " + str(exc)),
+                    }
+                    try:
+                        automatic_export(self.record, args.export_dir)
+                        self.persist_state()
+                    except OSError:
+                        pass
+                    self.display_record(self.record)
+                QtWidgets.QMessageBox.critical(
+                    self, "Unable to record Fireworks result",
+                    f"{exc}\n\nDo not resubmit until Fireworks and the local ledger have been checked.")
+            finally:
+                self.update_navigation()
 
         def formatted_request_edited(self):
             if not self.setting_formatted_request and self.record is not None:
@@ -909,6 +1300,10 @@ def main(argv=None) -> int:
                 return False
             self.formatted_request_dirty = False
             if valid:
+                try:
+                    self.sync_fireworks_controls(self.visible_fireworks_payload())
+                except ValueError:
+                    pass
                 _payload, unresolved = self.generated_fireworks_request(self.record)
                 message = "Manual Formatted Request saved"
                 if unresolved:
@@ -962,9 +1357,25 @@ def main(argv=None) -> int:
             self.formatted_request.setPlainText(request_text)
             self.setting_formatted_request = False
             self.formatted_request_dirty = False
+            try:
+                self.sync_fireworks_controls(json.loads(request_text))
+            except (json.JSONDecodeError, ValueError):
+                self.restore_fireworks_controls()
+            submission = record.get("fireworks_submission", {})
+            submission_status = (submission.get("status")
+                                 if isinstance(submission, dict) else None)
             if request_source == "draft":
                 self.set_formatted_request_message(
                     "INVALID JSON DRAFT PRESERVED — correct it to save a request",
+                    "#8b1e1e")
+            elif submission_status == "submitted":
+                activity = submission.get("activity_id")
+                self.set_formatted_request_message(
+                    "SUBMITTED TO FIREWORKS"
+                    + (f" — activity {activity}" if activity else ""), "#286428")
+            elif submission_status == "unknown":
+                self.set_formatted_request_message(
+                    "FIREWORKS OUTCOME UNKNOWN — verify before any resubmission",
                     "#8b1e1e")
             elif request_source == "reviewed":
                 message = "Manual Formatted Request saved"
@@ -981,6 +1392,7 @@ def main(argv=None) -> int:
             self.warning.setText("REVIEW REQUIRED — " + ("; ".join(record.get("warnings", ())) or "one or more fields require review"))
             self.warning.setVisible(needs_review); self.status.setText("Complete — review required" if needs_review else "Complete")
             self.update_selection_buttons()
+            self.update_fireworks_buttons()
 
         def clear_record_form(self):
             while self.form_layout.count():
@@ -1160,6 +1572,10 @@ def main(argv=None) -> int:
         def closeEvent(self, event):
             if self.future is not None and not self.future.done():
                 event.ignore(); QtWidgets.QMessageBox.information(self, "Processing", "Wait for local OCR to finish before closing."); return
+            if self.fireworks_future is not None and not self.fireworks_future.done():
+                event.ignore(); QtWidgets.QMessageBox.information(
+                    self, "Fireworks request in progress",
+                    "Wait for the current Fireworks operation to finish before closing."); return
             if self.record is not None:
                 try:
                     self.save_formatted_request()
@@ -1169,7 +1585,11 @@ def main(argv=None) -> int:
                     QtWidgets.QMessageBox.critical(self, "Unable to save current record", str(exc))
                     return
             self.poll_timer.stop()
+            self.fireworks_timer.stop()
             self.persist_state()
+            if self.fireworks_client is not None:
+                self.fireworks_client.clear_token()
+                self.fireworks_client = None
             self.executor.shutdown(wait=False, cancel_futures=True)
             self.preview_temp.cleanup(); super().closeEvent(event)
 
@@ -1180,6 +1600,12 @@ def main(argv=None) -> int:
             window, "Startup backup failed",
             "The application opened, but its startup backup could not be created:\n\n"
             + backup_warning)
+    if fireworks_mapping_warning:
+        QtWidgets.QMessageBox.warning(
+            window, "Fireworks mappings unavailable",
+            "OCR review remains available, but Fireworks submission is disabled until "
+            f"the external mapping file is corrected:\n\n{args.fireworks_ids}\n\n"
+            + fireworks_mapping_warning)
     return app.exec()
 
 

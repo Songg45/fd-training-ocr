@@ -589,7 +589,10 @@ def automatic_export(record: Mapping[str, Any], directory: Path) -> Path:
 
 def create_startup_backup(*, backup_dir: Path, export_dir: Path,
                           state_file: Path, config_file: Path | None,
-                          roster_file: Path | None, keep: int = 20,
+                          roster_file: Path | None,
+                          fireworks_mappings_file: Path | None = None,
+                          fireworks_ledger_file: Path | None = None,
+                          keep: int = 20,
                           snapshot_at: datetime | None = None) -> Path | None:
     """Create an immutable MM-DD-YYYY/HH-MM-SS startup data snapshot."""
     if keep < 1:
@@ -602,7 +605,11 @@ def create_startup_backup(*, backup_dir: Path, export_dir: Path,
                        for path in sorted(exports.glob("*.json")) if path.is_file())
     candidates = ((config_file, Path("Configuration") / "config.toml"),
                   (roster_file, Path("Roster") / "roster.json"),
-                  (state_file, Path("State") / "gui-state.json"))
+                  (state_file, Path("State") / "gui-state.json"),
+                  (fireworks_mappings_file,
+                   Path("Fireworks") / "fireworks-category-ids.json"),
+                  (fireworks_ledger_file,
+                   Path("Fireworks") / "submissions.jsonl"))
     for source, archive_path in candidates:
         if source is not None:
             resolved = source.expanduser().resolve()

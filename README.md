@@ -108,7 +108,12 @@ are stored as separate reviewed values without replacing machine evidence. A thi
 editable **Formatted Request** tab renders the reviewed record as a Fireworks `addActivity`
 payload. It derives the title/instructions, dates, times, total hours, and `staff` IDs; a
 warning names every attendee that lacks an exact external-roster Fireworks ID. Valid JSON
-edits autosave into the record. Invalid JSON is retained as a recoverable draft, and
+edits autosave into the record. The Fireworks Category and Class Location dropdowns update
+the exact JSON shown in that tab immediately: category changes `assignCat`, while location
+changes `location`, `locationstr`, and the corresponding values in `locationFlds`. Unrelated
+manual JSON edits are preserved. `station` remains fixed to Pilot FD (`54`). **Submit to
+Fireworks** parses, validates, and sends that exact visible JSON; it never silently rebuilds
+the payload behind the reviewer's back. Invalid JSON is retained as a recoverable draft, and
 **Regenerate from Structured Results** deliberately discards manual request edits. Results are
 automatically written to the configured export folder after processing, after edits, when
 moving with Previous/Next, and when closing the GUI; no separate export action is required.
@@ -117,6 +122,24 @@ immutable dated and timed folder such as
 `C:\Temp\FDTrainingOCR-Backups\08-22-2026\19-42-10`. Every launch creates a recovery point;
 the latest 20 snapshots are retained across all dates. Use `--backup-dir` to select another
 backup location.
+
+Fireworks' department-specific IDs stay outside the Git repository in
+`C:\Temp\fireworks-category-ids.json` by default. The file must contain the four selectable
+categories, the Fire Station/Classroom/Outside Area locations (including each location's
+`upsize_ts`), and the Pilot FD station ID. Override it with `--fireworks-ids`. The external
+append-only submission ledger defaults to
+`C:\Temp\FDTrainingOCR-Fireworks\submissions.jsonl`; override it with
+`--fireworks-ledger`. Both files are included in the GUI's timestamped startup backup when
+present.
+
+**Connect to Fireworks** accepts a bearer token in a masked input, keeps it only in memory,
+and validates it with one read-only location lookup. The token is discarded when the GUI
+closes. Submission requires a connected session, a valid visible payload, all attendee and
+instructor Fireworks Staff IDs, and an explicit confirmation. A submission performs exactly
+one `addActivity` POST with no automatic retry. Accepted, rejected, and indeterminate outcomes
+are recorded in the ledger. An accepted or indeterminate record is locked against another
+POST; after a timeout or connection loss, reconcile the activity directly in Fireworks before
+taking any further action. The normal automated test suite never makes a live Fireworks call.
 
 Launch it with the same local master, template, configuration, and Poppler executable used
 by the CLI:
@@ -134,8 +157,7 @@ Stages 1 and 2 use `ollama_model` (`qwen2.5vl:7b` by default); exception-only St
 to loopback. The preview is rendered into a temporary local directory and deleted when the
 window closes. The existing pipeline masks signature regions before retaining aligned
 artifacts or sending crops to Ollama. This checkpoint does not yet highlight source
-regions, process multi-page PDFs as forms, run an optimized unattended batch, or provide
-packaging automation.
+regions or process multi-page PDFs as forms.
 
 ## Station PC installer
 
