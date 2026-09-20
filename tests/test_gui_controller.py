@@ -23,6 +23,7 @@ from fd_training_ocr.gui_controller import (GuiPaths, accept_stage3_suggestion, 
                                              stage3_suggestion,
                                              alignment_fallback_record,
                                              roster_table_rows, save_roster_table,
+                                             import_fireworks_staff_ids,
                                              roster_linked_attendee_values,
                                              validate_pdf, validate_pdfs)
 
@@ -453,8 +454,8 @@ class GuiControllerTests(unittest.TestCase):
             root = Path(directory)
             repository = root / "repo"; repository.mkdir()
             roster_path = root / "roster.json"
-            rows = [("Nick Sledge", "4354", "Nicholas Sledge, N. Sledge"),
-                    ("Alex Myers", "JR7454", "")]
+            rows = [("Nick Sledge", "4354", "Nicholas Sledge, N. Sledge", "26"),
+                    ("Alex Myers", "JR7454", "", "20")]
             save_roster_table(roster_path, repository, rows)
             self.assertEqual(roster_table_rows(roster_path, repository), rows)
 
@@ -464,7 +465,20 @@ class GuiControllerTests(unittest.TestCase):
             repository = root / "repo"; repository.mkdir()
             with self.assertRaisesRegex(ValueError, "duplicated"):
                 save_roster_table(root / "roster.json", repository,
-                                  [("One", "4554", ""), ("Two", "4554", "")])
+                                  [("One", "4554", "", ""), ("Two", "4554", "", "")])
+
+    def test_import_fireworks_staff_ids_matches_roster_names_and_aliases(self):
+        rows = [("Nick Sledge", "4354", "Nicholas Sledge", ""),
+                ("Alex Myers", "JR7454", "", "")]
+        response = {"responseObj": [
+            {"staffId": 20, "firstName": "Alex", "lastName": "Myers", "MiddleName": ""},
+            {"staffId": 26, "firstName": "Nicholas", "lastName": "Sledge",
+             "MiddleName": ""},
+        ]}
+        imported, matched = import_fireworks_staff_ids(rows, response)
+        self.assertEqual(matched, 2)
+        self.assertEqual(imported[0][3], "26")
+        self.assertEqual(imported[1][3], "20")
 
     def test_processor_routes_two_models(self):
         calls = []

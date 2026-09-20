@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import Future, ThreadPoolExecutor
+from html import unescape
 import json
 from pathlib import Path
 import sys
@@ -22,10 +23,13 @@ from .gui_controller import (EVENT_SELECTIONS, GuiPaths, accept_stage3_suggestio
                              queue_index_for_page,
                              attendee_row_from_field, remove_attendee, roster_table_rows,
                              add_attendee, first_available_attendee_row, save_roster_table,
+                             import_fireworks_staff_ids,
                              roster_linked_attendee_values,
                              stage3_suggestion, unprocessed_sources,
                              validate_pdfs, alignment_fallback_record)
 from .pdf_render import render_pdf
+from .fireworks import formatted_fireworks_request, fireworks_staff_ids
+from .validation import load_roster
 
 
 def _qt():
@@ -206,6 +210,20 @@ def main(argv=None) -> int:
             tabs.addTab(self.form_scroll, "Structured Results")
             self.raw = QtWidgets.QPlainTextEdit(); self.raw.setReadOnly(True)
             tabs.addTab(self.raw, "Raw JSON")
+            formatted_widget = QtWidgets.QWidget()
+            formatted_layout = QtWidgets.QVBoxLayout(formatted_widget)
+            self.formatted_request_warning = QtWidgets.QLabel("")
+            self.formatted_request_warning.setWordWrap(True)
+            self.formatted_request_warning.setStyleSheet(
+                "background:#8b5a00;color:white;font-weight:bold;padding:6px;")
+            self.formatted_request = QtWidgets.QPlainTextEdit()
+            self.formatted_request.setReadOnly(True)
+            self.formatted_request.setAccessibleName("Formatted Fireworks Request")
+            self.formatted_request.setAccessibleDescription(
+                "Read-only Fireworks addActivity JSON generated from the reviewed record")
+            formatted_layout.addWidget(self.formatted_request_warning)
+            formatted_layout.addWidget(self.formatted_request, 1)
+            tabs.addTab(formatted_widget, "Formatted Request")
             self.load_button.triggered.connect(self.load_pdfs)
             self.folder_button.triggered.connect(self.load_folder)
             self.roster_button.triggered.connect(self.show_roster)
@@ -272,9 +290,10 @@ def main(argv=None) -> int:
             path_label = QtWidgets.QLabel(f"Current roster: {roster_path}")
             path_label.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
             layout.addWidget(path_label)
-            table = QtWidgets.QTableWidget(0, 3)
+            table = QtWidgets.QTableWidget(0, 4)
             table.setHorizontalHeaderLabels(["Name", "Unit IDs (comma-separated)",
-                                              "Aliases (comma-separated)"])
+                                              "Aliases (comma-separated)",
+                                              "Fireworks Staff ID"])
             table.horizontalHeader().setSectionResizeMode(
                 QtWidgets.QHeaderView.ResizeMode.Stretch)
             table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
@@ -293,11 +312,13 @@ def main(argv=None) -> int:
 
             controls = QtWidgets.QHBoxLayout(); layout.addLayout(controls)
             import_button = QtWidgets.QPushButton("Import Roster…")
+            import_fireworks_button = QtWidgets.QPushButton("Import Fireworks Staff…")
             add_button = QtWidgets.QPushButton("Add Row")
             remove_button = QtWidgets.QPushButton("Remove Selected")
             save_button = QtWidgets.QPushButton("Save Roster")
             close_button = QtWidgets.QPushButton("Close")
-            for button in (import_button, add_button, remove_button, save_button, close_button):
+            for button in (import_button, import_fireworks_button, add_button,
+                           remove_button, save_button, close_button):
                 controls.addWidget(button)
 
             def import_roster():
@@ -314,7 +335,7 @@ def main(argv=None) -> int:
 
             def add_row():
                 row = table.rowCount(); table.insertRow(row)
-                for column in range(3):
+                for column in range(4):
                     table.setItem(row, column, QtWidgets.QTableWidgetItem(""))
                 table.setCurrentCell(row, 0); table.editItem(table.item(row, 0))
 
@@ -329,7 +350,7 @@ def main(argv=None) -> int:
                 for row in range(table.rowCount()):
                     rows.append(tuple(
                         table.item(row, column).text() if table.item(row, column) else ""
-                        for column in range(3)))
+                        for column in range(4)))
                 try:
                     destination = save_roster_table(roster_path, Path.cwd(), rows)
                     path_label.setText(f"Current roster: {destination}")
@@ -340,11 +361,32 @@ def main(argv=None) -> int:
                     QtWidgets.QMessageBox.critical(dialog, "Unable to save roster", str(exc))
 
             import_button.clicked.connect(import_roster)
+            def import_fireworks_staff():
+                name, _ = QtWidgets.QFileDialog.getOpenFileName(
+                    dialog, "Import Fireworks staff response", "", "JSON files (*.json)")
+                if not name:
+                    return
+                rows = [tuple(
+                    table.item(row, column).text() if table.item(row, column) else ""
+                    for column in range(4)) for row in range(table.rowCount())]
+                try:
+                    response = json.loads(unescape(Path(name).read_text(encoding="utf-8")))
+                    imported, matched = import_fireworks_staff_ids(rows, response)
+                    put_rows(imported)
+                    self.status.setText(
+                        f"Matched {matched} roster members to Fireworks Staff IDs")
+                except (OSError, ValueError, json.JSONDecodeError) as exc:
+                    QtWidgets.QMessageBox.critical(
+                        dialog, "Unable to import Fireworks staff", str(exc))
+
+            import_fireworks_button.clicked.connect(import_fireworks_staff)
             add_button.clicked.connect(add_row)
             remove_button.clicked.connect(remove_rows)
             save_button.clicked.connect(save_roster)
             close_button.clicked.connect(dialog.accept)
             dialog.exec()
+            if self.record is not None:
+                self.display_record(self.record)
 
         def load_pdfs(self):
             names, _ = QtWidgets.QFileDialog.getOpenFileNames(self, "Add training forms", "", "PDF files (*.pdf)")
@@ -543,7 +585,8 @@ def main(argv=None) -> int:
             roster_combo.addItem("Custom entry…", None)
             try:
                 if config.roster_path is not None:
-                    for name, unit_ids, aliases in roster_table_rows(config.roster_path, Path.cwd()):
+                    for name, unit_ids, aliases, _fireworks_id in roster_table_rows(
+                            config.roster_path, Path.cwd()):
                         for unit_id in [item.strip() for item in unit_ids.split(",") if item.strip()]:
                             roster_combo.addItem(f"{name} — {unit_id}", (name, unit_id))
             except (OSError, ValueError):
@@ -784,6 +827,22 @@ def main(argv=None) -> int:
 
         def display_record(self, record):
             self.raw.setPlainText(json.dumps(record, indent=2, ensure_ascii=False))
+            staff_ids, unresolved_staff = (), tuple(
+                str(item.get("print_name") or item.get("unit_id") or "unknown attendee")
+                for item in record.get("attendees", ()) if isinstance(item, dict))
+            try:
+                if config.roster_path is not None:
+                    roster = load_roster(config.roster_path, Path.cwd())
+                    staff_ids, unresolved_staff = fireworks_staff_ids(record, roster)
+            except (OSError, ValueError):
+                pass
+            self.formatted_request.setPlainText(json.dumps(
+                formatted_fireworks_request(record, staff_ids),
+                indent=2, ensure_ascii=False))
+            warning = ("Fireworks Staff ID unresolved for: " + ", ".join(unresolved_staff)
+                       if unresolved_staff else "All attendees mapped to Fireworks Staff IDs")
+            self.formatted_request_warning.setText(warning)
+            self.formatted_request_warning.setVisible(bool(unresolved_staff))
             self.build_record_form(structured_rows(record))
             needs_review = record.get("status") == "review_required"
             self.warning.setText("REVIEW REQUIRED — " + ("; ".join(record.get("warnings", ())) or "one or more fields require review"))

@@ -728,10 +728,12 @@ def load_gui_state(state_file: Path) -> tuple[list[Path], int, dict[Path, Any], 
     return sources, current_index, records, failures
 
 
-def roster_table_rows(roster_path: Path, repository_root: Path) -> list[tuple[str, str, str]]:
+def roster_table_rows(
+        roster_path: Path, repository_root: Path) -> list[tuple[str, str, str, str]]:
     """Load a validated external roster into editable table-shaped strings."""
     roster = load_roster(roster_path, repository_root)
-    return [(member.name, ", ".join(member.unit_ids), ", ".join(member.aliases))
+    return [(member.name, ", ".join(member.unit_ids), ", ".join(member.aliases),
+             "" if member.fireworks_staff_id is None else str(member.fireworks_staff_id))
             for member in roster.members]
 
 
@@ -740,7 +742,7 @@ def _split_roster_values(value: str) -> list[str]:
 
 
 def save_roster_table(roster_path: Path, repository_root: Path,
-                      rows: list[tuple[str, str, str]]) -> Path:
+                      rows: list[tuple[str, str, str, str]]) -> Path:
     """Validate and atomically save editable roster rows outside the repository."""
     destination = roster_path.expanduser().resolve()
     root = repository_root.expanduser().resolve()
@@ -748,11 +750,14 @@ def save_roster_table(roster_path: Path, repository_root: Path,
         raise ValueError("roster path must be absolute and outside the Git repository")
     members = []
     seen_units = {}
-    for row_number, (raw_name, raw_units, raw_aliases) in enumerate(rows, start=1):
+    seen_fireworks_ids = {}
+    for row_number, (raw_name, raw_units, raw_aliases, raw_fireworks_id) in enumerate(
+            rows, start=1):
         name = raw_name.strip()
         units = _split_roster_values(raw_units)
         aliases = _split_roster_values(raw_aliases)
-        if not name and not units and not aliases:
+        fireworks_text = raw_fireworks_id.strip()
+        if not name and not units and not aliases and not fireworks_text:
             continue
         if not name or not units:
             raise ValueError(f"roster row {row_number} requires a name and at least one unit ID")
@@ -762,7 +767,25 @@ def save_roster_table(roster_path: Path, repository_root: Path,
                 raise ValueError(
                     f"unit ID {unit} is duplicated by {seen_units[key]} and {name}")
             seen_units[key] = name
-        members.append({"name": name, "unit_ids": units, "aliases": aliases})
+        fireworks_id = None
+        if fireworks_text:
+            try:
+                fireworks_id = int(fireworks_text)
+            except ValueError as exc:
+                raise ValueError(
+                    f"roster row {row_number} Fireworks Staff ID must be an integer") from exc
+            if fireworks_id <= 0:
+                raise ValueError(
+                    f"roster row {row_number} Fireworks Staff ID must be positive")
+            if fireworks_id in seen_fireworks_ids:
+                raise ValueError(
+                    f"Fireworks Staff ID {fireworks_id} is duplicated by "
+                    f"{seen_fireworks_ids[fireworks_id]} and {name}")
+            seen_fireworks_ids[fireworks_id] = name
+        member = {"name": name, "unit_ids": units, "aliases": aliases}
+        if fireworks_id is not None:
+            member["fireworks_staff_id"] = fireworks_id
+        members.append(member)
     if not members:
         raise ValueError("roster must contain at least one member")
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -772,6 +795,42 @@ def save_roster_table(roster_path: Path, repository_root: Path,
     temporary.replace(destination)
     load_roster(destination, root)
     return destination
+
+
+def import_fireworks_staff_ids(
+        rows: list[tuple[str, str, str, str]],
+        response: Mapping[str, Any]) -> tuple[list[tuple[str, str, str, str]], int]:
+    """Add staff IDs to roster rows from a Fireworks staff-list response."""
+    response_rows = response.get("responseObj")
+    if not isinstance(response_rows, list):
+        raise ValueError("Fireworks response must contain a responseObj array")
+    by_name: dict[str, int] = {}
+    for index, item in enumerate(response_rows):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"Fireworks responseObj[{index}] must be an object")
+        staff_id, first, last = item.get("staffId"), item.get("firstName"), item.get("lastName")
+        middle = item.get("MiddleName") or ""
+        if (isinstance(staff_id, bool) or not isinstance(staff_id, int)
+                or not isinstance(first, str) or not isinstance(middle, str)
+                or not isinstance(last, str)):
+            raise ValueError(f"Fireworks responseObj[{index}] has invalid identity fields")
+        full_name = " ".join(part.strip() for part in (first, middle, last)
+                             if part.strip()).casefold()
+        if full_name in by_name and by_name[full_name] != staff_id:
+            raise ValueError(f"Fireworks response contains duplicate name {full_name}")
+        by_name[full_name] = staff_id
+
+    imported, matched = [], 0
+    for name, units, aliases, existing_id in rows:
+        candidates = [name, *_split_roster_values(aliases)]
+        hits = {by_name[candidate.strip().casefold()]
+                for candidate in candidates
+                if candidate.strip().casefold() in by_name}
+        if len(hits) == 1:
+            existing_id = str(hits.pop())
+            matched += 1
+        imported.append((name, units, aliases, existing_id))
+    return imported, matched
 
 
 def build_processor(config: AppConfig, paths: GuiPaths,

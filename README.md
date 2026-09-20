@@ -52,7 +52,11 @@ recognition_max_attempts = 3
 Pass a file with `--config config.local.toml`. Local configuration, PDFs, outputs, logs, databases, crops, and signatures are ignored by Git.
 
 The optional roster must use an absolute path outside this Git repository. Its schema is
-`{"schema_version":1,"members":[{"name":"...","unit_ids":["..."],"aliases":["..."]}]}`.
+`{"schema_version":1,"members":[{"name":"...","unit_ids":["..."],"aliases":["..."],"fireworks_staff_id":20}]}`.
+`fireworks_staff_id` is optional and contains Fireworks' internal numeric person ID, not a
+department Unit ID. The GUI roster window can populate this column from a saved Fireworks
+staff-list API response with **Import Fireworks Staff…**, matching exact roster names and
+aliases while leaving uncertain matches blank.
 Use `C:\Temp\fd-training-ocr-roster.json` for deployment. The loader rejects repository-local,
 missing, unreadable, malformed, or unexpected roster content. Never commit roster data.
 
@@ -100,7 +104,10 @@ read-only. Dedicated Add Attendee and Delete Attendee buttons are voice-targetab
 Attendee dialog links exact roster Unit IDs to canonical names and unique roster names or
 aliases back to Unit IDs. OCR runs in a background executor while all Qt work remains on
 the main thread, and a prominent banner identifies records requiring human review. Edits
-are stored as separate reviewed values without replacing machine evidence. Results are
+are stored as separate reviewed values without replacing machine evidence. A third,
+read-only **Formatted Request** tab renders the reviewed record as a Fireworks `addActivity`
+payload. It derives the title/instructions, dates, times, total hours, and `staff` IDs; a
+warning names every attendee that lacks an exact external-roster Fireworks ID. Results are
 automatically written to the configured export folder after processing, after edits, when
 moving with Previous/Next, and when closing the GUI; no separate export action is required.
 At startup the GUI snapshots exported JSON, roster, queue state, and configuration into an
