@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "categories": [
+    {
+      "name": "Driver/Operator",
+      "id": 101,
+      "status": "synthetic"
+    },
+    {
+      "name": "Company Training",
+      "id": 102,
+      "status": "synthetic"
+    },
+    {
+      "name": "Officer Training",
+      "id": 103,
+      "status": "synthetic"
+    },
+    {
+      "name": "Outside Department Training",
+      "id": 104,
+      "status": "synthetic"
+    }
+  ],
+  "locations": [
+    {
+      "name": "Fire Station",
+      "id": 201,
+      "upsize_ts": "synthetic-station-version"
+    },
+    {
+      "name": "Training Ground",
+      "id": 202,
+      "upsize_ts": "synthetic-ground-version"
+    },
+    {
+      "name": "Outside Area",
+      "id": 203,
+      "upsize_ts": "synthetic-outside-version"
+    }
+  ],
+  "station": {
+    "name": "Example Station",
+    "id": 999
+  }
+}

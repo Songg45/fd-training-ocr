@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "synthetic_legacy": {
+    "roster": {
+      "schema_version": 1,
+      "members": [
+        {
+          "name": "Example Member",
+          "unit_ids": [
+            "EX54"
+          ],
+          "aliases": [
+            "E. Member"
+          ],
+          "old_vendor_staff_id": 501
+        }
+      ]
+    },
+    "reviewed_record": {
+      "source_file": "synthetic-training-form.pdf",
+      "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "page": 1,
+      "date": {
+        "value": "09/19/26"
+      },
+      "old_vendor_selection": {
+        "category": "Company Training",
+        "location": "Fire Station"
+      },
+      "old_vendor_request_review": {
+        "payload": {
+          "assignTitle": "Synthetic Training",
+          "staff": [
+            501
+          ],
+          "opaque_external_field": "old_vendor text inside payload is preserved"
+        },
+        "reviewed_at": "2026-09-19T12:00:00Z"
+      },
+      "old_vendor_request_draft": "{not valid json; preserve exactly}",
+      "old_vendor_submission": {
+        "status": "unknown",
+        "recorded_at": "2026-09-19T12:01:00Z",
+        "payload_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "activity_id": null,
+        "error": "synthetic timeout"
+      }
+    },
+    "receipt": {
+      "schema_version": 1,
+      "recorded_at": "2026-09-19T12:01:00Z",
+      "status": "unknown",
+      "source_file": "synthetic-training-form.pdf",
+      "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "page": 1,
+      "payload_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "payload": {
+        "assignTitle": "Synthetic Training",
+        "staff": [
+          501
+        ]
+      },
+      "activity_id": null,
+      "response": null,
+      "error": "synthetic timeout"
+    }
+  },
+  "expected_neutral": {
+    "roster": {
+      "schema_version": 1,
+      "members": [
+        {
+          "name": "Example Member",
+          "unit_ids": [
+            "EX54"
+          ],
+          "aliases": [
+            "E. Member"
+          ],
+          "training_system_staff_id": 501
+        }
+      ]
+    },
+    "reviewed_record": {
+      "source_file": "synthetic-training-form.pdf",
+      "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "page": 1,
+      "date": {
+        "value": "09/19/26"
+      },
+      "training_system_selection": {
+        "category": "Company Training",
+        "location": "Fire Station"
+      },
+      "training_system_request_review": {
+        "payload": {
+          "assignTitle": "Synthetic Training",
+          "staff": [
+            501
+          ],
+          "opaque_external_field": "old_vendor text inside payload is preserved"
+        },
+        "reviewed_at": "2026-09-19T12:00:00Z"
+      },
+      "training_system_request_draft": "{not valid json; preserve exactly}",
+      "training_system_submission": {
+        "status": "unknown",
+        "recorded_at": "2026-09-19T12:01:00Z",
+        "payload_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "activity_id": null,
+        "error": "synthetic timeout"
+      }
+    },
+    "receipt": {
+      "schema_version": 1,
+      "recorded_at": "2026-09-19T12:01:00Z",
+      "status": "unknown",
+      "source_file": "synthetic-training-form.pdf",
+      "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "page": 1,
+      "payload_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "payload": {
+        "assignTitle": "Synthetic Training",
+        "staff": [
+          501
+        ]
+      },
+      "activity_id": null,
+      "response": null,
+      "error": "synthetic timeout"
+    }
+  }
+}

@@ -23,9 +23,9 @@ description: "Dependency-ordered task list for neutralizing the external trainin
 
 **Purpose**: Capture a complete baseline outside Git and prepare neutral test inputs before renaming any permanent application file.
 
-- [ ] T001 Generate a case-insensitive baseline inventory of prohibited-token matches, including tracked file paths, line numbers, filenames, CLI names, persisted keys, and default local paths, and save it only to `C:\Temp\fd-training-ocr-branding-inventory.txt`
-- [ ] T002 Build the deployment-specific old-to-new property/file/directory rename map conforming to `specs/001-remove-vendor-branding/data-model.md` at `C:\Temp\fd-training-ocr-integration-rename-map.json`, validate that it is outside Git, and include every active roster, state, export, mapping, and ledger rename
-- [ ] T003 [P] Add synthetic neutral mapping, reviewed-record, roster, and receipt fixtures with no department data in `tests/fixtures/training-system-mapping.json` and `tests/fixtures/training-system-records.json`
+- [X] T001 Generate a case-insensitive baseline inventory of prohibited-token matches, including tracked file paths, line numbers, filenames, CLI names, persisted keys, and default local paths, and save it only to `C:\Temp\fd-training-ocr-branding-inventory.txt`
+- [X] T002 Build the deployment-specific old-to-new property/file/directory rename map conforming to `specs/001-remove-vendor-branding/data-model.md` at `C:\Temp\fd-training-ocr-integration-rename-map.json`, validate that it is outside Git, and include every active roster, state, export, mapping, and ledger rename
+- [X] T003 [P] Add synthetic neutral mapping, reviewed-record, roster, and receipt fixtures with no department data in `tests/fixtures/training-system-mapping.json` and `tests/fixtures/training-system-records.json`
 
 **Checkpoint**: Baseline and rename map exist outside Git; no application file or active operational file has changed.
 
@@ -37,11 +37,11 @@ description: "Dependency-ordered task list for neutralizing the external trainin
 
 **⚠️ CRITICAL**: No user-story implementation begins until migration and audit safety tests exist.
 
-- [ ] T004 [P] Write failing unit tests for rename-map validation, path containment, backup-before-write, structural JSON transformation, JSONL preservation, destination conflicts, idempotence, and excluded backup roots in `tests/test_data_migration.py`
-- [ ] T005 [P] Write failing tests for a runtime-supplied prohibited-token audit, including case variants, filenames, line reporting, missing environment input, and tracked-file-only behavior in `tests/test_branding_audit.py`
-- [ ] T006 Implement the generic `-WhatIf`-first migration engine, atomic file replacement, timestamped recovery snapshot, conflict exit codes, idempotence, and machine-readable report contract in `scripts/Migrate-FDTrainingOCRData.ps1` until T004 passes with synthetic names
-- [ ] T007 Implement the runtime-supplied tracked-content and tracked-filename audit with actionable file/line reporting in `scripts/Test-NeutralBranding.ps1` until T005 passes without committing the prohibited token
-- [ ] T008 Run only `tests/test_data_migration.py` and `tests/test_branding_audit.py`, record their offline pass results in `specs/001-remove-vendor-branding/validation-foundation.md`, and verify that neither test modifies `C:\Temp` active data
+- [X] T004 [P] Write failing unit tests for rename-map validation, path containment, backup-before-write, structural JSON transformation, JSONL preservation, destination conflicts, idempotence, and excluded backup roots in `tests/test_data_migration.py`
+- [X] T005 [P] Write failing tests for a runtime-supplied prohibited-token audit, including case variants, filenames, line reporting, missing environment input, and tracked-file-only behavior in `tests/test_branding_audit.py`
+- [X] T006 Implement the generic `-WhatIf`-first migration engine, atomic file replacement, timestamped recovery snapshot, conflict exit codes, idempotence, and machine-readable report contract in `scripts/Migrate-FDTrainingOCRData.ps1` until T004 passes with synthetic names
+- [X] T007 Implement the runtime-supplied tracked-content and tracked-filename audit with actionable file/line reporting in `scripts/Test-NeutralBranding.ps1` until T005 passes without committing the prohibited token
+- [X] T008 Run only `tests/test_data_migration.py` and `tests/test_branding_audit.py`, record their offline pass results in `specs/001-remove-vendor-branding/validation-foundation.md`, and verify that neither test modifies `C:\Temp` active data
 
 **Checkpoint**: Generic migration and audit foundations are independently tested; active operational data remains untouched.
 

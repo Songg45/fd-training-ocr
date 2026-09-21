@@ -7,6 +7,7 @@
   -RenameMap C:\Temp\fd-training-ocr-integration-rename-map.json `
   -OperationalRoot C:\Temp `
   -BackupRoot C:\Temp\FDTrainingOCR-Backups `
+  -ReportPath C:\Temp\FDTrainingOCR-Migration-Reports\foundation-dry-run.json `
   -WhatIf
 ```
 
@@ -22,6 +23,7 @@ Remove `-WhatIf` only after the dry-run report has no conflicts or errors.
 ## Guarantees
 
 - Resolve and validate every path before mutation.
+- Inspect only the explicit JSON/JSONL files and bounded directory patterns listed in the rename map.
 - Reject any target outside the approved operational root.
 - Never traverse or rewrite the excluded historical backup root.
 - Dry run performs no mutation.

@@ -114,6 +114,13 @@ External operational input that tells the generic migration engine how to conver
 
 - `schema_version`: Required integer, initially `1`.
 - `property_renames`: Object mapping exact old property names to neutral property names.
+- `json_targets`: Array of structural-rewrite targets. Targets are explicit so the engine never scans the operational root broadly.
+  - `path`: Absolute file or directory path under the approved operational root.
+  - `kind`: `file` or `directory`.
+  - `pattern`: File-name pattern used only for directory targets, normally `*.json` or `*.jsonl`.
+  - `recursive`: Boolean controlling directory recursion; defaults to `false`.
+  - `format`: `json` or `jsonl`.
+  - `required`: Boolean; a missing optional target is reported and skipped.
 - `file_moves`: Array of move records.
   - `source`: Absolute source path under the approved operational root.
   - `destination`: Absolute neutral destination path under the approved operational root.
@@ -125,6 +132,7 @@ External operational input that tells the generic migration engine how to conver
 - Paths must resolve below explicitly approved operational roots.
 - Source and destination cannot be equal.
 - Two sources cannot target the same destination.
+- JSON targets must be explicit files or bounded directory-plus-pattern selections; a bare operational-root scan is invalid.
 - Destination conflicts must be byte-identical or migration stops.
 - The map is external and must not be copied into tracked files or timestamped source-control artifacts.
 
