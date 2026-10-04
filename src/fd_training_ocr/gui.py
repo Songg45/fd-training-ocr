@@ -60,6 +60,28 @@ def submission_close_action(future: Future | None) -> str:
     return "finalize" if future.done() else "wait"
 
 
+def fireworks_response_popup_text(
+        *, status_code: int | None,
+        response_text: str | None,
+        response_payload=None,
+        response_body_sha256: str | None = None) -> str:
+    """Render the complete non-secret HTTP response evidence for a dialog."""
+    if response_text is not None:
+        body = response_text
+    elif response_payload is not None:
+        body = json.dumps(
+            response_payload, indent=2, ensure_ascii=False, allow_nan=False)
+    else:
+        body = "(no response body was received)"
+    status = str(status_code) if status_code is not None else "unavailable"
+    digest = response_body_sha256 or "unavailable"
+    return (
+        f"HTTP status: {status}\n"
+        f"Response body SHA-256: {digest}\n\n"
+        "Complete response body:\n"
+        f"{body}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="fd-training-ocr-gui")
     parser.add_argument("--config", type=Path)
@@ -1298,7 +1320,13 @@ def main(argv=None) -> int:
                         self, "Fireworks activity submitted",
                         "Fireworks accepted the activity."
                         + (f"\n\nActivity ID: {activity}" if activity else
-                           "\n\nNo activity ID was present in the response; the full receipt was recorded."))
+                           "\n\nNo activity ID was present in the response; the full receipt was recorded.")
+                        + "\n\n"
+                        + fireworks_response_popup_text(
+                            status_code=result.status_code,
+                            response_text=result.text,
+                            response_payload=result.payload,
+                            response_body_sha256=result.body_sha256))
             except FireworksSubmissionUnknown as exc:
                 if pending is not None:
                     self.record = pending["record"]
@@ -1318,7 +1346,14 @@ def main(argv=None) -> int:
                     self.display_record(self.record)
                 QtWidgets.QMessageBox.critical(
                     self, "Fireworks outcome unknown",
-                    f"{exc}\n\nDo not submit this record again until Fireworks has been checked.")
+                    f"{exc}\n\n"
+                    "Do not submit this record again until Fireworks has been checked."
+                    "\n\n"
+                    + fireworks_response_popup_text(
+                        status_code=exc.status_code,
+                        response_text=exc.response_text,
+                        response_payload=exc.response_payload,
+                        response_body_sha256=exc.response_body_sha256))
             except FireworksSubmissionRejected as exc:
                 if pending is not None:
                     self.record = pending["record"]
@@ -1336,7 +1371,13 @@ def main(argv=None) -> int:
                         pass
                     self.display_record(self.record)
                 QtWidgets.QMessageBox.warning(
-                    self, "Fireworks rejected the activity", str(exc))
+                    self, "Fireworks rejected the activity",
+                    "The response was classified as a definite rejection.\n\n"
+                    + fireworks_response_popup_text(
+                        status_code=exc.status_code,
+                        response_text=exc.response_text,
+                        response_payload=exc.response_payload,
+                        response_body_sha256=exc.response_body_sha256))
             except FireworksConnectionError as exc:
                 if self.fireworks_client is not None:
                     self.fireworks_client.clear_token()
