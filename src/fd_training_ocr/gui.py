@@ -29,7 +29,8 @@ from .gui_controller import (EVENT_SELECTIONS, GuiPaths, accept_stage3_suggestio
                              stage3_suggestion, unprocessed_sources,
                              validate_pdfs, alignment_fallback_record)
 from .pdf_render import render_pdf
-from .fireworks import (displayed_fireworks_request, formatted_fireworks_request,
+from .fireworks import (backfill_reviewed_instructors,
+                        displayed_fireworks_request, formatted_fireworks_request,
                         fireworks_instructor_ids, fireworks_staff_ids,
                         load_fireworks_mappings,
                         parse_fireworks_request,
@@ -1623,9 +1624,24 @@ def main(argv=None) -> int:
             except (OSError, ValueError) as exc:
                 ledger_warning = str(exc)
             self.fireworks_ledger_error = ledger_warning
-            self.raw.setPlainText(json.dumps(record, indent=2, ensure_ascii=False))
             generated, unresolved = self.generated_fireworks_request(record)
             unresolved_staff, unresolved_instructors = unresolved
+            submission = record.get("fireworks_submission", {})
+            submission_status = (submission.get("status")
+                                 if isinstance(submission, dict) else None)
+            instructors_backfilled = False
+            instructor_backfill_error = None
+            if submission_status not in LOCKED_SUBMISSION_STATUSES:
+                instructors_backfilled = backfill_reviewed_instructors(
+                    record, tuple(generated.get("instructors", ())),
+                    datetime.now(timezone.utc).isoformat())
+                if instructors_backfilled:
+                    try:
+                        automatic_export(record, args.export_dir)
+                        self.persist_state()
+                    except OSError as exc:
+                        instructor_backfill_error = str(exc)
+            self.raw.setPlainText(json.dumps(record, indent=2, ensure_ascii=False))
             request_text, request_source = displayed_fireworks_request(record, generated)
             self.setting_formatted_request = True
             self.formatted_request.setPlainText(request_text)
@@ -1635,9 +1651,6 @@ def main(argv=None) -> int:
                 self.sync_fireworks_controls(parse_fireworks_request(request_text))
             except (json.JSONDecodeError, ValueError):
                 self.restore_fireworks_controls()
-            submission = record.get("fireworks_submission", {})
-            submission_status = (submission.get("status")
-                                 if isinstance(submission, dict) else None)
             if ledger_warning:
                 self.set_formatted_request_message(
                     "SUBMISSION LEDGER ERROR — upload remains disabled until corrected: "
@@ -1667,6 +1680,18 @@ def main(argv=None) -> int:
                 self.set_formatted_request_message(
                     "MANUALLY RECONCILED — no activity was created; ready for review",
                     "#286428")
+            elif instructor_backfill_error:
+                self.set_formatted_request_message(
+                    "RESOLVED INSTRUCTOR ADDED TO THE VISIBLE REQUEST, BUT THE "
+                    "UPDATE COULD NOT BE SAVED — " + instructor_backfill_error,
+                    "#8b1e1e")
+            elif instructors_backfilled:
+                instructor_ids = ", ".join(
+                    str(item) for item in generated.get("instructors", ()))
+                self.set_formatted_request_message(
+                    "Resolved instructor added to Formatted Request as Instructor "
+                    f"ID {instructor_ids}; verify the exact payload before submission",
+                    "#8b5a00")
             elif request_source == "reviewed":
                 message = "Manual Formatted Request saved"
                 if unresolved_staff:

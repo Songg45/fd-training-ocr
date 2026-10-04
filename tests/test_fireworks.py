@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 from fd_training_ocr.fireworks import (FireworksCategory, FireworksInstructor,
                                        FireworksLocation,
                                        FireworksMappings, displayed_fireworks_request,
+                                       backfill_reviewed_instructors,
                                        fireworks_instructor_ids,
                                        fireworks_staff_ids, formatted_fireworks_request,
                                        load_fireworks_mappings, save_fireworks_request_edit,
@@ -345,6 +346,50 @@ class FireworksRequestTests(unittest.TestCase):
         self.assertIn("Invalid JSON", error)
         text, source = displayed_fireworks_request(record, {"staff": []})
         self.assertEqual((text, source), ('{"assignTitle":', "draft"))
+
+    def test_resolved_instructor_backfills_empty_legacy_reviewed_request(self):
+        record = {
+            "fireworks_request_review": {
+                "payload": {"staff": [20], "instructors": []},
+                "reviewed_at": "2026-10-04T12:00:00+00:00",
+            },
+        }
+
+        changed = backfill_reviewed_instructors(
+            record, (1,), "2026-10-04T12:05:00+00:00")
+
+        self.assertTrue(changed)
+        self.assertEqual(
+            record["fireworks_request_review"]["payload"]["instructors"], [1])
+        self.assertEqual(
+            record["fireworks_request_review"]["instructors_updated_at"],
+            "2026-10-04T12:05:00+00:00")
+
+    def test_resolved_instructor_never_overwrites_nonempty_manual_selection(self):
+        record = {
+            "fireworks_request_review": {
+                "payload": {"staff": [20], "instructors": [9]},
+            },
+        }
+
+        changed = backfill_reviewed_instructors(
+            record, (1,), "2026-10-04T12:05:00+00:00")
+
+        self.assertFalse(changed)
+        self.assertEqual(
+            record["fireworks_request_review"]["payload"]["instructors"], [9])
+
+    def test_unresolved_instructor_does_not_modify_reviewed_request(self):
+        record = {
+            "fireworks_request_review": {
+                "payload": {"staff": [20], "instructors": []},
+            },
+        }
+
+        self.assertFalse(backfill_reviewed_instructors(
+            record, (), "2026-10-04T12:05:00+00:00"))
+        self.assertEqual(
+            record["fireworks_request_review"]["payload"]["instructors"], [])
 
     def test_formatted_request_requires_numeric_staff_ids(self):
         record = {}

@@ -8,7 +8,7 @@ from decimal import Decimal, InvalidOperation
 from html import escape
 import json
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, MutableMapping
 
 from .strict_json import parse_json_object
 
@@ -382,6 +382,31 @@ def displayed_fireworks_request(
     if isinstance(review, Mapping) and isinstance(review.get("payload"), Mapping):
         return json.dumps(review["payload"], indent=2, ensure_ascii=False), "reviewed"
     return json.dumps(dict(generated), indent=2, ensure_ascii=False), "generated"
+
+
+def backfill_reviewed_instructors(
+        record: MutableMapping[str, Any], instructor_ids: tuple[int, ...],
+        updated_at: str) -> bool:
+    """Fill only an empty legacy reviewed instructor array from a resolved name.
+
+    Existing non-empty selections are preserved so a manual payload choice is
+    never silently replaced. The caller must keep locked/submitted records out
+    of this compatibility update.
+    """
+    if not instructor_ids:
+        return False
+    review = record.get("fireworks_request_review")
+    if not isinstance(review, MutableMapping):
+        return False
+    payload = review.get("payload")
+    if not isinstance(payload, MutableMapping):
+        return False
+    current = payload.get("instructors")
+    if current not in (None, []):
+        return False
+    payload["instructors"] = list(instructor_ids)
+    review["instructors_updated_at"] = updated_at
+    return True
 
 
 def formatted_fireworks_request(
