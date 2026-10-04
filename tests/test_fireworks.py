@@ -2,8 +2,10 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from fd_training_ocr.fireworks import (FireworksCategory, FireworksLocation,
+from fd_training_ocr.fireworks import (FireworksCategory, FireworksInstructor,
+                                       FireworksLocation,
                                        FireworksMappings, displayed_fireworks_request,
+                                       fireworks_instructor_ids,
                                        fireworks_staff_ids, formatted_fireworks_request,
                                        load_fireworks_mappings, save_fireworks_request_edit,
                                        parse_fireworks_request,
@@ -27,7 +29,11 @@ class FireworksRequestTests(unittest.TestCase):
                 FireworksLocation("Classroom", 202, "classroom-version"),
                 FireworksLocation("Outside Area", 203, "outside-version"),
             ),
-            "Pilot FD", 54)
+            "Pilot FD", 54,
+            (
+                FireworksInstructor("Matthew Grice", 2),
+                FireworksInstructor("Nicholas Sledge", 9, ("Nick Sledge",)),
+            ))
 
     def test_reviewed_values_build_fireworks_request(self):
         record = {
@@ -45,6 +51,7 @@ class FireworksRequestTests(unittest.TestCase):
             record, (20, 21),
             category=mappings.category_named("Company Training"),
             location=mappings.location_named("Fire Station"),
+            instructor_ids=(9,),
             station_id=mappings.station_id)
         self.assertEqual(payload["assignTitle"], "Fire & Safety")
         self.assertEqual(payload["assignInst"], "<p>Fire &amp; Safety</p>")
@@ -53,6 +60,7 @@ class FireworksRequestTests(unittest.TestCase):
         self.assertEqual(payload["totalHours"], "4")
         self.assertEqual(payload["staff"], [20, 21])
         self.assertEqual(payload["attendance"], 2)
+        self.assertEqual(payload["instructors"], [9])
         self.assertEqual(payload["assignCat"], 101)
         self.assertEqual(payload["location"], 201)
         self.assertEqual(payload["station"], 54)
@@ -95,12 +103,11 @@ class FireworksRequestTests(unittest.TestCase):
         self.assertEqual(staff_ids, (20, 26))
         self.assertEqual(unresolved, ("Unknown Person",))
 
-    def test_instructor_is_added_as_staff_and_deduplicated(self):
+    def test_instructor_is_not_counted_as_attending_staff(self):
         record = {
             "fields": {"instructor": {"reviewed_value": "Nick Sledge"}},
             "attendees": [
-                {"row": 1, "unit_id": "4354", "print_name": "Nick Sledge"},
-                {"row": 2, "unit_id": "JR7454", "print_name": "Alex Myers"},
+                {"row": 1, "unit_id": "JR7454", "print_name": "Alex Myers"},
             ],
         }
         roster = Roster((
@@ -108,16 +115,23 @@ class FireworksRequestTests(unittest.TestCase):
             RosterMember("Nick Sledge", ("4354",), ("Nicholas Sledge",), 26),
         ))
         staff_ids, unresolved = fireworks_staff_ids(record, roster)
-        self.assertEqual(staff_ids, (26, 20))
+        self.assertEqual(staff_ids, (20,))
         self.assertEqual(unresolved, ())
 
-    def test_unmatched_instructor_blocks_staff_resolution(self):
+    def test_instructor_uses_separate_mapping_and_aliases(self):
         record = {
-            "fields": {"instructor": {"reviewed_value": "Unknown Trainer"}},
+            "fields": {"instructor": {"reviewed_value": "Nick Sledge"}},
             "attendees": [],
         }
-        staff_ids, unresolved = fireworks_staff_ids(record, Roster(()))
-        self.assertEqual(staff_ids, ())
+        instructor_ids, unresolved = fireworks_instructor_ids(
+            record, self.mappings())
+        self.assertEqual(instructor_ids, (9,))
+        self.assertEqual(unresolved, ())
+
+        record["fields"]["instructor"]["reviewed_value"] = "Unknown Trainer"
+        instructor_ids, unresolved = fireworks_instructor_ids(
+            record, self.mappings())
+        self.assertEqual(instructor_ids, ())
         self.assertEqual(unresolved, ("Instructor: Unknown Trainer",))
 
     def test_dropdown_update_changes_only_controlled_payload_fields(self):
@@ -241,6 +255,38 @@ class FireworksRequestTests(unittest.TestCase):
 
         self.assertIn("attendance must equal the number of staff IDs (2)", errors)
 
+    def test_submission_validation_requires_exact_reviewed_instructor_id(self):
+        mappings = self.mappings()
+        record = {"fields": {
+            "date": {"reviewed_value": "09/19/26"},
+            "start_time": {"reviewed_value": "18:00"},
+            "end_time": {"reviewed_value": "19:00"},
+            "total_hours": {"reviewed_value": "1"},
+            "description": {"reviewed_value": "Reviewed training"},
+        }}
+        payload = formatted_fireworks_request(
+            record, (20,), category=mappings.category_named("Company Training"),
+            location=mappings.location_named("Fire Station"),
+            instructor_ids=(9,), station_id=54)
+
+        self.assertEqual(validate_fireworks_payload(
+            payload, mappings, expected_staff_ids=(20,),
+            expected_instructor_ids=(9,)), ())
+
+        payload["instructors"] = [2]
+        errors = validate_fireworks_payload(
+            payload, mappings, expected_staff_ids=(20,),
+            expected_instructor_ids=(9,))
+        self.assertIn("instructors is missing reviewed Instructor ID 9", errors)
+        self.assertIn("instructors contains unexpected Instructor ID 2", errors)
+
+        payload["instructors"] = [999]
+        errors = validate_fireworks_payload(
+            payload, mappings, unresolved_instructors=("Instructor: Unknown",),
+            expected_instructor_ids=())
+        self.assertIn("instructors contains unconfigured Instructor ID 999", errors)
+        self.assertTrue(any("Instructor: Unknown" in error for error in errors))
+
     def test_external_mapping_file_is_strict_and_selects_only_submission_categories(self):
         with TemporaryDirectory() as name:
             path = Path(name) / "ids.json"
@@ -258,6 +304,10 @@ class FireworksRequestTests(unittest.TestCase):
                 {"name":"Classroom","id":202,"upsize_ts":"b"},
                 {"name":"Outside Area","id":203,"upsize_ts":"c"}
               ],
+              "instructors": [
+                {"name":"Nicholas Sledge","id":9,"aliases":["Nick Sledge"]},
+                {"name":"Matthew Grice","id":2,"aliases":[]}
+              ],
               "station": {"name":"Pilot FD","id":54}
             }''', encoding="utf-8")
             mappings = load_fireworks_mappings(path)
@@ -266,6 +316,8 @@ class FireworksRequestTests(unittest.TestCase):
             ["Company Training", "Driver/Operator", "Officer Training",
              "Outside Department Training"])
         self.assertEqual(mappings.station_id, 54)
+        self.assertEqual(mappings.instructor_named("Nick Sledge").id, 9)
+        self.assertEqual(mappings.instructor_with_id(2).name, "Matthew Grice")
 
     def test_external_mapping_rejects_duplicate_json_keys(self):
         with TemporaryDirectory() as name:
@@ -279,7 +331,7 @@ class FireworksRequestTests(unittest.TestCase):
     def test_formatted_request_edits_and_invalid_drafts_are_persistent(self):
         record = {}
         valid, error = save_fireworks_request_edit(
-            record, '{"assignTitle":"Reviewed","staff":[20]}',
+            record, '{"assignTitle":"Reviewed","staff":[20],"instructors":[9]}',
             "2026-09-19T12:00:00+00:00")
         self.assertTrue(valid)
         self.assertIsNone(error)

@@ -42,11 +42,26 @@ class FireworksLocation:
 
 
 @dataclass(frozen=True)
+class FireworksInstructor:
+    name: str
+    id: int
+    aliases: tuple[str, ...] = ()
+
+    def matches(self, value: str) -> bool:
+        candidate = " ".join(value.split()).casefold()
+        return candidate in {
+            " ".join(item.split()).casefold()
+            for item in (self.name, *self.aliases)
+        }
+
+
+@dataclass(frozen=True)
 class FireworksMappings:
     categories: tuple[FireworksCategory, ...]
     locations: tuple[FireworksLocation, ...]
     station_name: str
     station_id: int
+    instructors: tuple[FireworksInstructor, ...] = ()
 
     def category_named(self, name: str | None) -> FireworksCategory | None:
         return next((item for item in self.categories if item.name == name), None)
@@ -63,6 +78,16 @@ class FireworksMappings:
         if isinstance(value, bool) or not isinstance(value, int):
             return None
         return next((item for item in self.locations if item.id == value), None)
+
+    def instructor_named(self, name: str | None) -> FireworksInstructor | None:
+        if not isinstance(name, str) or not name.strip():
+            return None
+        return next((item for item in self.instructors if item.matches(name)), None)
+
+    def instructor_with_id(self, value: Any) -> FireworksInstructor | None:
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None
+        return next((item for item in self.instructors if item.id == value), None)
 
 
 def _positive_integer(value: Any, field_name: str) -> int:
@@ -141,8 +166,48 @@ def load_fireworks_mappings(path: Path) -> FireworksMappings:
     station_id = _positive_integer(raw_station.get("id"), "station.id")
     if not station_name:
         raise ValueError("station.name is required")
+
+    raw_instructors = payload.get("instructors", [])
+    if not isinstance(raw_instructors, list):
+        raise ValueError("Fireworks mappings instructors must be an array")
+    instructors: list[FireworksInstructor] = []
+    seen_instructor_ids: set[int] = set()
+    seen_instructor_names: set[str] = set()
+    for index, item in enumerate(raw_instructors):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"instructors[{index}] must be an object")
+        name = str(item.get("name") or "").strip()
+        if not name:
+            raise ValueError(f"instructors[{index}].name is required")
+        instructor_id = _positive_integer(
+            item.get("id"), f"instructors[{index}].id")
+        raw_aliases = item.get("aliases", [])
+        if not isinstance(raw_aliases, list) or any(
+                not isinstance(alias, str) or not alias.strip()
+                for alias in raw_aliases):
+            raise ValueError(
+                f"instructors[{index}].aliases must contain non-empty strings")
+        aliases = tuple(alias.strip() for alias in raw_aliases)
+        all_names = (name, *aliases)
+        normalized_names = {
+            " ".join(value.split()).casefold() for value in all_names
+        }
+        if len(normalized_names) != len(all_names):
+            raise ValueError(f"instructors[{index}] contains duplicate names")
+        if instructor_id in seen_instructor_ids:
+            raise ValueError(f"duplicate Fireworks instructor ID {instructor_id}")
+        duplicate_names = normalized_names & seen_instructor_names
+        if duplicate_names:
+            raise ValueError(
+                "duplicate Fireworks instructor name or alias: "
+                + ", ".join(sorted(duplicate_names)))
+        seen_instructor_ids.add(instructor_id)
+        seen_instructor_names.update(normalized_names)
+        instructors.append(FireworksInstructor(name, instructor_id, aliases))
+    instructors.sort(key=lambda item: item.id)
     return FireworksMappings(
-        tuple(categories), tuple(locations), station_name, station_id)
+        tuple(categories), tuple(locations), station_name, station_id,
+        tuple(instructors))
 
 
 def _field_value(record: Mapping[str, Any], name: str) -> Any:
@@ -239,7 +304,7 @@ def selected_location_name(record: Mapping[str, Any]) -> str | None:
 
 
 def fireworks_staff_ids(record: Mapping[str, Any], roster: Any) -> tuple[tuple[int, ...], tuple[str, ...]]:
-    """Resolve reviewed attendees and instructor to Fireworks IDs without guessing."""
+    """Resolve reviewed attendees to Fireworks staff IDs without guessing."""
     resolved: list[int] = []
     unresolved: list[str] = []
     for attendee in record.get("attendees", ()):
@@ -254,14 +319,20 @@ def fireworks_staff_ids(record: Mapping[str, Any], roster: Any) -> tuple[tuple[i
             continue
         if member.fireworks_staff_id not in resolved:
             resolved.append(member.fireworks_staff_id)
-    instructor = _field_value(record, "instructor")
-    if instructor not in (None, ""):
-        member = roster.member_for_name(str(instructor))
-        if member is None or member.fireworks_staff_id is None:
-            unresolved.append(f"Instructor: {instructor}")
-        elif member.fireworks_staff_id not in resolved:
-            resolved.append(member.fireworks_staff_id)
     return tuple(resolved), tuple(unresolved)
+
+
+def fireworks_instructor_ids(
+        record: Mapping[str, Any],
+        mappings: FireworksMappings) -> tuple[tuple[int, ...], tuple[str, ...]]:
+    """Resolve the reviewed instructor in Fireworks' separate ID namespace."""
+    instructor = _field_value(record, "instructor")
+    if instructor in (None, ""):
+        return (), ()
+    match = mappings.instructor_named(str(instructor))
+    if match is None:
+        return (), (f"Instructor: {instructor}",)
+    return (match.id,), ()
 
 
 def parse_fireworks_request(text: str) -> dict[str, Any]:
@@ -285,6 +356,14 @@ def save_fireworks_request_edit(record: dict[str, Any], text: str,
             or any(isinstance(item, bool) or not isinstance(item, int) for item in staff)):
         record["fireworks_request_draft"] = text
         return False, "Formatted Request staff must be an array of numeric Fireworks IDs"
+    instructors = payload.get("instructors")
+    if (not isinstance(instructors, list)
+            or any(isinstance(item, bool) or not isinstance(item, int)
+                   for item in instructors)):
+        record["fireworks_request_draft"] = text
+        return False, (
+            "Formatted Request instructors must be an array of numeric "
+            "Fireworks Instructor IDs")
     record["fireworks_request_review"] = {
         "payload": payload,
         "reviewed_at": reviewed_at,
@@ -309,6 +388,7 @@ def formatted_fireworks_request(
         record: Mapping[str, Any], staff_ids: tuple[int, ...] = (), *,
         category: FireworksCategory | None = None,
         location: FireworksLocation | None = None,
+        instructor_ids: tuple[int, ...] = (),
         station_id: int = 54) -> dict[str, Any]:
     """Return the addActivity payload shown during the second human review.
 
@@ -323,6 +403,7 @@ def formatted_fireworks_request(
     start_dt, end_dt = _fireworks_datetimes(
         date_value, _field_value(record, "start_time"), _field_value(record, "end_time"))
     staff = list(staff_ids)
+    instructors = list(instructor_ids)
 
     location_fields = {
         "moneln": None if location is None else location.id,
@@ -421,6 +502,7 @@ def formatted_fireworks_request(
         "removeStaffing": [],
         "EquipmentUsedLive": [],
         "locationFlds": location_fields,
+        "instructors": instructors,
     }
 
 
@@ -465,7 +547,9 @@ def _request_datetime(value: Any, name: str, errors: list[str]) -> datetime | No
 def validate_fireworks_payload(
         payload: Mapping[str, Any], mappings: FireworksMappings,
         unresolved_staff: tuple[str, ...] = (), *,
-        expected_staff_ids: tuple[int, ...] | None = None) -> tuple[str, ...]:
+        expected_staff_ids: tuple[int, ...] | None = None,
+        unresolved_instructors: tuple[str, ...] = (),
+        expected_instructor_ids: tuple[int, ...] | None = None) -> tuple[str, ...]:
     """Return all reasons the visible request is unsafe to submit."""
     errors: list[str] = []
     if payload.get("moneln") is not None:
@@ -545,6 +629,33 @@ def validate_fireworks_payload(
 
     if unresolved_staff:
         errors.append("unresolved Fireworks Staff ID: " + ", ".join(unresolved_staff))
+    instructors = payload.get("instructors")
+    if not isinstance(instructors, list):
+        errors.append("instructors must be an array of Fireworks Instructor IDs")
+    elif any(isinstance(item, bool) or not isinstance(item, int) or item <= 0
+             for item in instructors):
+        errors.append(
+            "instructors must contain only positive numeric Fireworks Instructor IDs")
+    elif len(instructors) != len(set(instructors)):
+        errors.append("instructors contains duplicate Fireworks Instructor IDs")
+    else:
+        for instructor_id in instructors:
+            if mappings.instructor_with_id(instructor_id) is None:
+                errors.append(
+                    f"instructors contains unconfigured Instructor ID {instructor_id}")
+        if expected_instructor_ids is not None:
+            expected = set(expected_instructor_ids)
+            actual = set(instructors)
+            for instructor_id in sorted(expected - actual):
+                errors.append(
+                    f"instructors is missing reviewed Instructor ID {instructor_id}")
+            for instructor_id in sorted(actual - expected):
+                errors.append(
+                    f"instructors contains unexpected Instructor ID {instructor_id}")
+    if unresolved_instructors:
+        errors.append(
+            "unresolved Fireworks Instructor ID: "
+            + ", ".join(unresolved_instructors))
     return tuple(errors)
 
 

@@ -30,7 +30,8 @@ from .gui_controller import (EVENT_SELECTIONS, GuiPaths, accept_stage3_suggestio
                              validate_pdfs, alignment_fallback_record)
 from .pdf_render import render_pdf
 from .fireworks import (displayed_fireworks_request, formatted_fireworks_request,
-                        fireworks_staff_ids, load_fireworks_mappings,
+                        fireworks_instructor_ids, fireworks_staff_ids,
+                        load_fireworks_mappings,
                         parse_fireworks_request,
                         save_fireworks_request_edit, selected_category_name,
                         selected_location_name,
@@ -996,17 +997,22 @@ def main(argv=None) -> int:
             staff_ids, unresolved_staff = (), tuple(
                 str(item.get("print_name") or item.get("unit_id") or "unknown attendee")
                 for item in record.get("attendees", ()) if isinstance(item, dict))
+            instructor_ids: tuple[int, ...] = ()
+            unresolved_instructors: tuple[str, ...] = ()
             instructor_field = record.get("fields", {}).get("instructor", {})
             instructor = (display_value(instructor_field)
                           if isinstance(instructor_field, dict) else None)
             if instructor not in (None, ""):
-                unresolved_staff += (f"Instructor: {instructor}",)
+                unresolved_instructors = (f"Instructor: {instructor}",)
             try:
                 if config.roster_path is not None:
                     roster = load_roster(config.roster_path, Path.cwd())
                     staff_ids, unresolved_staff = fireworks_staff_ids(record, roster)
             except (OSError, ValueError):
                 pass
+            if fireworks_mappings is not None:
+                instructor_ids, unresolved_instructors = fireworks_instructor_ids(
+                    record, fireworks_mappings)
             category = (fireworks_mappings.category_named(selected_category_name(record))
                         if fireworks_mappings is not None else None)
             location = (fireworks_mappings.location_named(selected_location_name(record))
@@ -1014,7 +1020,8 @@ def main(argv=None) -> int:
             station_id = fireworks_mappings.station_id if fireworks_mappings is not None else 54
             return formatted_fireworks_request(
                 record, staff_ids, category=category, location=location,
-                station_id=station_id), unresolved_staff
+                instructor_ids=instructor_ids, station_id=station_id), (
+                    unresolved_staff, unresolved_instructors)
 
         def set_formatted_request_message(self, message, color="#8b5a00"):
             self.formatted_request_warning.setText(message)
@@ -1202,10 +1209,14 @@ def main(argv=None) -> int:
             try:
                 payload = self.visible_fireworks_payload()
                 generated, unresolved = self.generated_fireworks_request(self.record)
+                unresolved_staff, unresolved_instructors = unresolved
                 expected_staff = tuple(generated.get("staff", ()))
+                expected_instructors = tuple(generated.get("instructors", ()))
                 errors = validate_fireworks_payload(
-                    payload, fireworks_mappings, unresolved,
-                    expected_staff_ids=expected_staff)
+                    payload, fireworks_mappings, unresolved_staff,
+                    expected_staff_ids=expected_staff,
+                    unresolved_instructors=unresolved_instructors,
+                    expected_instructor_ids=expected_instructors)
                 if errors:
                     raise ValueError("\n".join(f"• {error}" for error in errors))
                 submission = self.record.get("fireworks_submission", {})
@@ -1215,6 +1226,10 @@ def main(argv=None) -> int:
                         f"This record is already marked {submission.get('status')}")
                 fireworks_ledger.assert_may_submit(self.record, payload)
                 staff_review = self.fireworks_staff_review_text(payload["staff"])
+                instructor_review = "\n".join(
+                    f"  • {fireworks_mappings.instructor_with_id(item).name} "
+                    f"— Instructor ID {item}"
+                    for item in payload["instructors"])
                 canonical_text = json.dumps(
                     payload, indent=2, ensure_ascii=False, allow_nan=False)
                 self.setting_formatted_request = True
@@ -1239,6 +1254,8 @@ def main(argv=None) -> int:
                 f"Location: {location.name if location else payload.get('location')}\n"
                 f"Station: {fireworks_mappings.station_name} "
                 f"({fireworks_mappings.station_id})\n"
+                f"Instructors ({len(payload.get('instructors', []))}):\n"
+                f"{instructor_review or '  • None'}\n"
                 f"Participants ({len(payload.get('staff', []))}):\n"
                 f"{staff_review}\n\n"
                 "Submit this reviewed record now?")
@@ -1520,9 +1537,14 @@ def main(argv=None) -> int:
                 except ValueError:
                     pass
                 _payload, unresolved = self.generated_fireworks_request(self.record)
+                unresolved_staff, unresolved_instructors = unresolved
                 message = "Manual Formatted Request saved"
-                if unresolved:
-                    message += "; verify manually unresolved roster attendee(s): " + ", ".join(unresolved)
+                if unresolved_staff:
+                    message += "; unresolved roster attendee(s): " + ", ".join(
+                        unresolved_staff)
+                if unresolved_instructors:
+                    message += "; unresolved instructor(s): " + ", ".join(
+                        unresolved_instructors)
                 self.set_formatted_request_message(message, "#286428")
                 if show_confirmation:
                     self.status.setText("Formatted Request saved; automatic export updated")
@@ -1575,7 +1597,8 @@ def main(argv=None) -> int:
                 ledger_warning = str(exc)
             self.fireworks_ledger_error = ledger_warning
             self.raw.setPlainText(json.dumps(record, indent=2, ensure_ascii=False))
-            generated, unresolved_staff = self.generated_fireworks_request(record)
+            generated, unresolved = self.generated_fireworks_request(record)
+            unresolved_staff, unresolved_instructors = unresolved
             request_text, request_source = displayed_fireworks_request(record, generated)
             self.setting_formatted_request = True
             self.formatted_request.setPlainText(request_text)
@@ -1620,11 +1643,19 @@ def main(argv=None) -> int:
             elif request_source == "reviewed":
                 message = "Manual Formatted Request saved"
                 if unresolved_staff:
-                    message += "; verify manually unresolved roster attendee(s): " + ", ".join(unresolved_staff)
+                    message += "; unresolved roster attendee(s): " + ", ".join(
+                        unresolved_staff)
+                if unresolved_instructors:
+                    message += "; unresolved instructor(s): " + ", ".join(
+                        unresolved_instructors)
                 self.set_formatted_request_message(message, "#286428")
             elif unresolved_staff:
                 self.set_formatted_request_message(
                     "Fireworks Staff ID unresolved for: " + ", ".join(unresolved_staff))
+            elif unresolved_instructors:
+                self.set_formatted_request_message(
+                    "Fireworks Instructor ID unresolved for: "
+                    + ", ".join(unresolved_instructors))
             else:
                 self.set_formatted_request_message("")
             self.build_record_form(structured_rows(record))
