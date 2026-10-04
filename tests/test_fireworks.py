@@ -135,6 +135,21 @@ class FireworksRequestTests(unittest.TestCase):
         self.assertEqual(instructor_ids, ())
         self.assertEqual(unresolved, ("Instructor: Unknown Trainer",))
 
+    def test_roster_instructor_id_overrides_mapping_fallback(self):
+        record = {
+            "fields": {"instructor": {"reviewed_value": "Austin Greene"}},
+            "attendees": [],
+        }
+        roster = Roster((
+            RosterMember("Austin Greene", ("1154",), (), 8, 1),
+        ))
+
+        instructor_ids, unresolved = fireworks_instructor_ids(
+            record, self.mappings(), roster)
+
+        self.assertEqual(instructor_ids, (1,))
+        self.assertEqual(unresolved, ())
+
     def test_dropdown_update_changes_only_controlled_payload_fields(self):
         mappings = self.mappings()
         payload = {

@@ -4,7 +4,10 @@ import unittest
 from fd_training_ocr.gui import (fireworks_resolution_warning,
                                  fireworks_response_popup_text,
                                  record_banner_state,
+                                 roster_rows_with_instructor_ids,
                                  submission_close_action)
+from fd_training_ocr.fireworks import (FireworksCategory, FireworksInstructor,
+                                       FireworksLocation, FireworksMappings)
 
 
 class SubmissionCloseTests(unittest.TestCase):
@@ -105,6 +108,28 @@ class FireworksResolutionWarningTests(unittest.TestCase):
 
     def test_empty_resolution_warning_is_hidden(self):
         self.assertEqual(fireworks_resolution_warning((), ()), "")
+
+
+class RosterInstructorColumnTests(unittest.TestCase):
+    def test_external_mapping_prefills_only_blank_instructor_ids(self):
+        mappings = FireworksMappings(
+            (FireworksCategory("Company Training", 1, "confirmed"),),
+            (FireworksLocation("Fire Station", 3, "version"),),
+            "Pilot FD", 54,
+            (FireworksInstructor("Robert Austin Greene", 1,
+                                 ("Austin Greene",)),))
+        rows = [
+            ("Austin Greene", "1154", "", "8", ""),
+            ("Manual Instructor", "2254", "", "12", "99"),
+        ]
+
+        self.assertEqual(
+            roster_rows_with_instructor_ids(rows, mappings),
+            [
+                ("Austin Greene", "1154", "", "8", "1"),
+                ("Manual Instructor", "2254", "", "12", "99"),
+            ],
+        )
 
 
 if __name__ == "__main__":

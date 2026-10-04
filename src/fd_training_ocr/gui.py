@@ -121,6 +121,28 @@ def fireworks_resolution_warning(
     return " | ".join(warnings)
 
 
+def roster_rows_with_instructor_ids(rows, mappings):
+    """Prefill blank roster Instructor IDs from the external ID mapping."""
+    enriched = []
+    for name, unit_ids, aliases, staff_id, instructor_id in rows:
+        match = None
+        if not instructor_id and mappings is not None:
+            candidates = [name]
+            candidates.extend(
+                item.strip()
+                for item in aliases.replace(";", ",").split(",")
+                if item.strip())
+            match = next(
+                (mappings.instructor_named(candidate) for candidate in candidates
+                 if mappings.instructor_named(candidate) is not None),
+                None)
+        enriched.append((
+            name, unit_ids, aliases, staff_id,
+            str(match.id) if match is not None else instructor_id,
+        ))
+    return enriched
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="fd-training-ocr-gui")
     parser.add_argument("--config", type=Path)
@@ -469,10 +491,11 @@ def main(argv=None) -> int:
             path_label = QtWidgets.QLabel(f"Current roster: {roster_path}")
             path_label.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
             layout.addWidget(path_label)
-            table = QtWidgets.QTableWidget(0, 4)
+            table = QtWidgets.QTableWidget(0, 5)
             table.setHorizontalHeaderLabels(["Name", "Unit IDs (comma-separated)",
                                               "Aliases (comma-separated)",
-                                              "Fireworks Staff ID"])
+                                              "Fireworks Staff ID",
+                                              "Fireworks Instructor ID"])
             table.horizontalHeader().setSectionResizeMode(
                 QtWidgets.QHeaderView.ResizeMode.Stretch)
             table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
@@ -484,8 +507,12 @@ def main(argv=None) -> int:
                     for column, value in enumerate(values):
                         table.setItem(row_number, column, QtWidgets.QTableWidgetItem(value))
 
+            def load_roster_rows(path):
+                return roster_rows_with_instructor_ids(
+                    roster_table_rows(path, Path.cwd()), fireworks_mappings)
+
             try:
-                put_rows(roster_table_rows(roster_path, Path.cwd()))
+                put_rows(load_roster_rows(roster_path))
             except (OSError, ValueError) as exc:
                 QtWidgets.QMessageBox.warning(dialog, "Unable to read roster", str(exc))
 
@@ -506,7 +533,7 @@ def main(argv=None) -> int:
                 if not name:
                     return
                 try:
-                    put_rows(roster_table_rows(Path(name), Path.cwd()))
+                    put_rows(load_roster_rows(Path(name)))
                     path_label.setText(
                         f"Imported for review: {name}\nSave destination: {roster_path}")
                 except (OSError, ValueError) as exc:
@@ -514,7 +541,7 @@ def main(argv=None) -> int:
 
             def add_row():
                 row = table.rowCount(); table.insertRow(row)
-                for column in range(4):
+                for column in range(5):
                     table.setItem(row, column, QtWidgets.QTableWidgetItem(""))
                 table.setCurrentCell(row, 0); table.editItem(table.item(row, 0))
 
@@ -529,7 +556,7 @@ def main(argv=None) -> int:
                 for row in range(table.rowCount()):
                     rows.append(tuple(
                         table.item(row, column).text() if table.item(row, column) else ""
-                        for column in range(4)))
+                        for column in range(5)))
                 try:
                     destination = save_roster_table(roster_path, Path.cwd(), rows)
                     path_label.setText(f"Current roster: {destination}")
@@ -547,7 +574,7 @@ def main(argv=None) -> int:
                     return
                 rows = [tuple(
                     table.item(row, column).text() if table.item(row, column) else ""
-                    for column in range(4)) for row in range(table.rowCount())]
+                    for column in range(5)) for row in range(table.rowCount())]
                 try:
                     response = json.loads(unescape(Path(name).read_text(encoding="utf-8")))
                     imported, matched = import_fireworks_staff_ids(rows, response)
@@ -789,7 +816,7 @@ def main(argv=None) -> int:
             roster_combo.addItem("Custom entry…", None)
             try:
                 if config.roster_path is not None:
-                    for name, unit_ids, aliases, _fireworks_id in roster_table_rows(
+                    for name, unit_ids, aliases, _fireworks_id, _instructor_id in roster_table_rows(
                             config.roster_path, Path.cwd()):
                         for unit_id in [item.strip() for item in unit_ids.split(",") if item.strip()]:
                             roster_combo.addItem(f"{name} — {unit_id}", (name, unit_id))
@@ -1043,6 +1070,7 @@ def main(argv=None) -> int:
                           if isinstance(instructor_field, dict) else None)
             if instructor not in (None, ""):
                 unresolved_instructors = (f"Instructor: {instructor}",)
+            roster = None
             try:
                 if config.roster_path is not None:
                     roster = load_roster(config.roster_path, Path.cwd())
@@ -1051,7 +1079,7 @@ def main(argv=None) -> int:
                 pass
             if fireworks_mappings is not None:
                 instructor_ids, unresolved_instructors = fireworks_instructor_ids(
-                    record, fireworks_mappings)
+                    record, fireworks_mappings, roster)
             category = (fireworks_mappings.category_named(selected_category_name(record))
                         if fireworks_mappings is not None else None)
             location = (fireworks_mappings.location_named(selected_location_name(record))
@@ -1243,6 +1271,29 @@ def main(argv=None) -> int:
                 f"  • {names[staff_id]} — Staff ID {staff_id}"
                 for staff_id in staff_ids)
 
+        def fireworks_instructor_review_text(self, instructor_ids):
+            names = {}
+            if config.roster_path is not None:
+                roster = load_roster(config.roster_path, Path.cwd())
+                names.update({
+                    member.fireworks_instructor_id: member.name
+                    for member in roster.members
+                    if member.fireworks_instructor_id is not None
+                })
+            if fireworks_mappings is not None:
+                names.update({
+                    item.id: item.name for item in fireworks_mappings.instructors
+                    if item.id not in names
+                })
+            missing = [item for item in instructor_ids if item not in names]
+            if missing:
+                raise ValueError(
+                    "no name is configured for Fireworks Instructor ID: "
+                    + ", ".join(str(item) for item in missing))
+            return "\n".join(
+                f"  • {names[item]} — Instructor ID {item}"
+                for item in instructor_ids)
+
         def submit_to_fireworks(self):
             if (self.record is None or fireworks_mappings is None
                     or self.fireworks_client is None
@@ -1271,10 +1322,8 @@ def main(argv=None) -> int:
                         f"This record is already marked {submission.get('status')}")
                 fireworks_ledger.assert_may_submit(self.record, payload)
                 staff_review = self.fireworks_staff_review_text(payload["staff"])
-                instructor_review = "\n".join(
-                    f"  • {fireworks_mappings.instructor_with_id(item).name} "
-                    f"— Instructor ID {item}"
-                    for item in payload["instructors"])
+                instructor_review = self.fireworks_instructor_review_text(
+                    payload["instructors"])
                 resolution_warning = fireworks_resolution_warning(
                     unresolved_staff, unresolved_instructors)
                 omitted_people_notice = (

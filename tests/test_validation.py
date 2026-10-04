@@ -31,6 +31,27 @@ class RosterTests(unittest.TestCase):
         self.assertEqual(roster.member_for_unit("4354"), member)
         self.assertIsNone(roster.member_for_unit("U354"))
 
+    def test_external_roster_loads_separate_staff_and_instructor_ids(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "repo"
+            root.mkdir()
+            roster_path = Path(temp) / "roster.json"
+            roster_path.write_text(json.dumps({
+                "schema_version": 1,
+                "members": [{
+                    "name": "Austin Greene",
+                    "unit_ids": ["1154"],
+                    "aliases": ["Robert Austin Greene"],
+                    "fireworks_staff_id": 8,
+                    "fireworks_instructor_id": 1,
+                }],
+            }), encoding="utf-8")
+
+            member = load_roster(roster_path, root).members[0]
+
+            self.assertEqual(member.fireworks_staff_id, 8)
+            self.assertEqual(member.fireworks_instructor_id, 1)
+
     def test_external_roster_matches_alias_without_changing_raw(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "repo"; root.mkdir(); roster_path = Path(temp) / "roster.json"

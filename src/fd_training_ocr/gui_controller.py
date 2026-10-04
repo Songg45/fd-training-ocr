@@ -736,11 +736,14 @@ def load_gui_state(state_file: Path) -> tuple[list[Path], int, dict[Path, Any], 
 
 
 def roster_table_rows(
-        roster_path: Path, repository_root: Path) -> list[tuple[str, str, str, str]]:
+        roster_path: Path,
+        repository_root: Path) -> list[tuple[str, str, str, str, str]]:
     """Load a validated external roster into editable table-shaped strings."""
     roster = load_roster(roster_path, repository_root)
     return [(member.name, ", ".join(member.unit_ids), ", ".join(member.aliases),
-             "" if member.fireworks_staff_id is None else str(member.fireworks_staff_id))
+             "" if member.fireworks_staff_id is None else str(member.fireworks_staff_id),
+             "" if member.fireworks_instructor_id is None
+             else str(member.fireworks_instructor_id))
             for member in roster.members]
 
 
@@ -749,7 +752,7 @@ def _split_roster_values(value: str) -> list[str]:
 
 
 def save_roster_table(roster_path: Path, repository_root: Path,
-                      rows: list[tuple[str, str, str, str]]) -> Path:
+                      rows: list[tuple[str, str, str, str, str]]) -> Path:
     """Validate and atomically save editable roster rows outside the repository."""
     destination = roster_path.expanduser().resolve()
     root = repository_root.expanduser().resolve()
@@ -758,13 +761,16 @@ def save_roster_table(roster_path: Path, repository_root: Path,
     members = []
     seen_units = {}
     seen_fireworks_ids = {}
-    for row_number, (raw_name, raw_units, raw_aliases, raw_fireworks_id) in enumerate(
-            rows, start=1):
+    seen_instructor_ids = {}
+    for row_number, (raw_name, raw_units, raw_aliases, raw_fireworks_id,
+                     raw_instructor_id) in enumerate(rows, start=1):
         name = raw_name.strip()
         units = _split_roster_values(raw_units)
         aliases = _split_roster_values(raw_aliases)
         fireworks_text = raw_fireworks_id.strip()
-        if not name and not units and not aliases and not fireworks_text:
+        instructor_text = raw_instructor_id.strip()
+        if (not name and not units and not aliases and not fireworks_text
+                and not instructor_text):
             continue
         if not name or not units:
             raise ValueError(f"roster row {row_number} requires a name and at least one unit ID")
@@ -789,9 +795,26 @@ def save_roster_table(roster_path: Path, repository_root: Path,
                     f"Fireworks Staff ID {fireworks_id} is duplicated by "
                     f"{seen_fireworks_ids[fireworks_id]} and {name}")
             seen_fireworks_ids[fireworks_id] = name
+        instructor_id = None
+        if instructor_text:
+            try:
+                instructor_id = int(instructor_text)
+            except ValueError as exc:
+                raise ValueError(
+                    f"roster row {row_number} Fireworks Instructor ID must be an integer") from exc
+            if instructor_id <= 0:
+                raise ValueError(
+                    f"roster row {row_number} Fireworks Instructor ID must be positive")
+            if instructor_id in seen_instructor_ids:
+                raise ValueError(
+                    f"Fireworks Instructor ID {instructor_id} is duplicated by "
+                    f"{seen_instructor_ids[instructor_id]} and {name}")
+            seen_instructor_ids[instructor_id] = name
         member = {"name": name, "unit_ids": units, "aliases": aliases}
         if fireworks_id is not None:
             member["fireworks_staff_id"] = fireworks_id
+        if instructor_id is not None:
+            member["fireworks_instructor_id"] = instructor_id
         members.append(member)
     if not members:
         raise ValueError("roster must contain at least one member")
@@ -805,8 +828,8 @@ def save_roster_table(roster_path: Path, repository_root: Path,
 
 
 def import_fireworks_staff_ids(
-        rows: list[tuple[str, str, str, str]],
-        response: Mapping[str, Any]) -> tuple[list[tuple[str, str, str, str]], int]:
+        rows: list[tuple[str, str, str, str, str]],
+        response: Mapping[str, Any]) -> tuple[list[tuple[str, str, str, str, str]], int]:
     """Add staff IDs to roster rows from a Fireworks staff-list response."""
     response_rows = response.get("responseObj")
     if not isinstance(response_rows, list):
@@ -828,7 +851,7 @@ def import_fireworks_staff_ids(
         by_name[full_name] = staff_id
 
     imported, matched = [], 0
-    for name, units, aliases, existing_id in rows:
+    for name, units, aliases, existing_id, instructor_id in rows:
         candidates = [name, *_split_roster_values(aliases)]
         hits = {by_name[candidate.strip().casefold()]
                 for candidate in candidates
@@ -836,7 +859,7 @@ def import_fireworks_staff_ids(
         if len(hits) == 1:
             existing_id = str(hits.pop())
             matched += 1
-        imported.append((name, units, aliases, existing_id))
+        imported.append((name, units, aliases, existing_id, instructor_id))
     return imported, matched
 
 

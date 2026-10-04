@@ -24,6 +24,7 @@ class RosterMember:
     unit_ids: tuple[str, ...]
     aliases: tuple[str, ...] = ()
     fireworks_staff_id: int | None = None
+    fireworks_instructor_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -87,10 +88,12 @@ def load_roster(path: Path, repository_root: Path) -> Roster:
     members = []
     for index, item in enumerate(payload["members"]):
         if not isinstance(item, dict) or set(item) - {
-                "name", "unit_ids", "aliases", "fireworks_staff_id"}:
+                "name", "unit_ids", "aliases", "fireworks_staff_id",
+                "fireworks_instructor_id"}:
             raise RosterError(f"members[{index}] has invalid keys")
         name, units, aliases = item.get("name"), item.get("unit_ids"), item.get("aliases", [])
         fireworks_staff_id = item.get("fireworks_staff_id")
+        fireworks_instructor_id = item.get("fireworks_instructor_id")
         if not isinstance(name, str) or not name.strip() or not isinstance(units, list) or not units or not all(isinstance(x, str) and x.strip() for x in units) or not isinstance(aliases, list) or not all(isinstance(x, str) and x.strip() for x in aliases):
             raise RosterError(f"members[{index}] requires name, nonempty unit_ids, and optional string aliases")
         if (fireworks_staff_id is not None
@@ -99,13 +102,24 @@ def load_roster(path: Path, repository_root: Path) -> Roster:
                      or fireworks_staff_id <= 0)):
             raise RosterError(
                 f"members[{index}].fireworks_staff_id must be a positive integer")
+        if (fireworks_instructor_id is not None
+                and (isinstance(fireworks_instructor_id, bool)
+                     or not isinstance(fireworks_instructor_id, int)
+                     or fireworks_instructor_id <= 0)):
+            raise RosterError(
+                f"members[{index}].fireworks_instructor_id must be a positive integer")
         members.append(RosterMember(
             name.strip(), tuple(x.strip() for x in units),
-            tuple(x.strip() for x in aliases), fireworks_staff_id))
+            tuple(x.strip() for x in aliases), fireworks_staff_id,
+            fireworks_instructor_id))
     fireworks_ids = [member.fireworks_staff_id for member in members
                      if member.fireworks_staff_id is not None]
     if len(fireworks_ids) != len(set(fireworks_ids)):
         raise RosterError("fireworks_staff_id values must be unique")
+    instructor_ids = [member.fireworks_instructor_id for member in members
+                      if member.fireworks_instructor_id is not None]
+    if len(instructor_ids) != len(set(instructor_ids)):
+        raise RosterError("fireworks_instructor_id values must be unique")
     return Roster(tuple(members))
 
 

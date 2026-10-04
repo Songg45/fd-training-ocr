@@ -324,11 +324,16 @@ def fireworks_staff_ids(record: Mapping[str, Any], roster: Any) -> tuple[tuple[i
 
 def fireworks_instructor_ids(
         record: Mapping[str, Any],
-        mappings: FireworksMappings) -> tuple[tuple[int, ...], tuple[str, ...]]:
+        mappings: FireworksMappings,
+        roster: Any | None = None) -> tuple[tuple[int, ...], tuple[str, ...]]:
     """Resolve the reviewed instructor in Fireworks' separate ID namespace."""
     instructor = _field_value(record, "instructor")
     if instructor in (None, ""):
         return (), ()
+    if roster is not None:
+        member = roster.member_for_name(str(instructor))
+        if member is not None and member.fireworks_instructor_id is not None:
+            return (member.fireworks_instructor_id,), ()
     match = mappings.instructor_named(str(instructor))
     if match is None:
         return (), (f"Instructor: {instructor}",)
@@ -667,8 +672,10 @@ def validate_fireworks_payload(
     elif len(instructors) != len(set(instructors)):
         errors.append("instructors contains duplicate Fireworks Instructor IDs")
     else:
+        expected_instructors = set(expected_instructor_ids or ())
         for instructor_id in instructors:
-            if mappings.instructor_with_id(instructor_id) is None:
+            if (mappings.instructor_with_id(instructor_id) is None
+                    and instructor_id not in expected_instructors):
                 errors.append(
                     f"instructors contains unconfigured Instructor ID {instructor_id}")
         if expected_instructor_ids is not None:
