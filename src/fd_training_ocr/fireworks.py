@@ -260,17 +260,40 @@ def fireworks_staff_ids(record: Mapping[str, Any], roster: Any) -> tuple[tuple[i
     return tuple(resolved), tuple(unresolved)
 
 
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def _reject_non_finite_json_number(value: str) -> None:
+    raise ValueError(f"non-finite JSON number is not allowed: {value}")
+
+
+def parse_fireworks_request(text: str) -> dict[str, Any]:
+    """Parse one exact request object without lossy or ambiguous JSON values."""
+    payload = json.loads(
+        text, object_pairs_hook=_reject_duplicate_json_keys,
+        parse_constant=_reject_non_finite_json_number)
+    if not isinstance(payload, dict):
+        raise ValueError("Formatted Request must be a JSON object")
+    return payload
+
+
 def save_fireworks_request_edit(record: dict[str, Any], text: str,
                                 reviewed_at: str) -> tuple[bool, str | None]:
     """Persist valid request JSON or retain invalid text as a recoverable draft."""
     try:
-        payload = json.loads(text)
+        payload = parse_fireworks_request(text)
     except json.JSONDecodeError as exc:
         record["fireworks_request_draft"] = text
         return False, f"Invalid JSON at line {exc.lineno}, column {exc.colno}: {exc.msg}"
-    if not isinstance(payload, dict):
+    except ValueError as exc:
         record["fireworks_request_draft"] = text
-        return False, "Formatted Request must be a JSON object"
+        return False, f"Invalid JSON: {exc}"
     staff = payload.get("staff")
     if (not isinstance(staff, list)
             or any(isinstance(item, bool) or not isinstance(item, int) for item in staff)):
@@ -454,7 +477,8 @@ def _request_datetime(value: Any, name: str, errors: list[str]) -> datetime | No
 
 def validate_fireworks_payload(
         payload: Mapping[str, Any], mappings: FireworksMappings,
-        unresolved_staff: tuple[str, ...] = ()) -> tuple[str, ...]:
+        unresolved_staff: tuple[str, ...] = (), *,
+        expected_staff_ids: tuple[int, ...] | None = None) -> tuple[str, ...]:
     """Return all reasons the visible request is unsafe to submit."""
     errors: list[str] = []
     if payload.get("moneln") is not None:
@@ -504,6 +528,13 @@ def validate_fireworks_payload(
         errors.append("staff must contain only positive numeric Fireworks Staff IDs")
     elif len(staff) != len(set(staff)):
         errors.append("staff contains duplicate Fireworks Staff IDs")
+    elif expected_staff_ids is not None:
+        expected = set(expected_staff_ids)
+        actual = set(staff)
+        for staff_id in sorted(expected - actual):
+            errors.append(f"staff is missing reviewed Staff ID {staff_id}")
+        for staff_id in sorted(actual - expected):
+            errors.append(f"staff contains unexpected Staff ID {staff_id}")
 
     if unresolved_staff:
         errors.append("unresolved Fireworks Staff ID: " + ", ".join(unresolved_staff))
@@ -515,5 +546,5 @@ def fireworks_payload_hash(payload: Mapping[str, Any]) -> str:
     import hashlib
     encoded = json.dumps(
         dict(payload), ensure_ascii=False, sort_keys=True,
-        separators=(",", ":")).encode("utf-8")
+        separators=(",", ":"), allow_nan=False).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()

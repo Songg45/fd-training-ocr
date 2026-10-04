@@ -31,10 +31,12 @@ from .gui_controller import (EVENT_SELECTIONS, GuiPaths, accept_stage3_suggestio
 from .pdf_render import render_pdf
 from .fireworks import (displayed_fireworks_request, formatted_fireworks_request,
                         fireworks_staff_ids, load_fireworks_mappings,
+                        parse_fireworks_request,
                         save_fireworks_request_edit, selected_category_name,
                         selected_location_name,
                         update_payload_selection, validate_fireworks_payload)
 from .fireworks_client import (DuplicateSubmissionError, FireworksClient,
+                               FIREWORKS_API_BASE,
                                FireworksConnectionError,
                                FireworksSubmissionRejected,
                                FireworksSubmissionUnknown, SubmissionLedger)
@@ -66,7 +68,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fireworks-ledger", type=Path,
                         default=Path(r"C:\Temp\FDTrainingOCR-Fireworks\submissions.jsonl"))
     parser.add_argument("--fireworks-api-base",
-                        default="https://webtrainingapi.eprsys.com/api")
+                        default=FIREWORKS_API_BASE)
     return parser
 
 
@@ -1010,9 +1012,8 @@ def main(argv=None) -> int:
                     or self.record is None or fireworks_mappings is None):
                 return
             try:
-                payload = json.loads(self.formatted_request.toPlainText())
-                if not isinstance(payload, dict):
-                    raise ValueError("Formatted Request must be a JSON object")
+                payload = parse_fireworks_request(
+                    self.formatted_request.toPlainText())
             except (json.JSONDecodeError, ValueError) as exc:
                 self.restore_fireworks_controls()
                 QtWidgets.QMessageBox.warning(
@@ -1069,7 +1070,8 @@ def main(argv=None) -> int:
             submission = (self.record.get("fireworks_submission", {})
                           if isinstance(self.record, dict) else {})
             locked = (isinstance(submission, dict)
-                      and submission.get("status") in {"submitted", "unknown"})
+                      and submission.get("status") in {
+                          "attempting", "submitted", "unknown"})
             mappings_ready = fireworks_mappings is not None
             self.fireworks_category.setEnabled(
                 idle and self.record is not None and mappings_ready and not locked)
@@ -1116,13 +1118,32 @@ def main(argv=None) -> int:
 
         def visible_fireworks_payload(self):
             try:
-                payload = json.loads(self.formatted_request.toPlainText())
+                return parse_fireworks_request(
+                    self.formatted_request.toPlainText())
             except json.JSONDecodeError as exc:
                 raise ValueError(
                     f"Invalid JSON at line {exc.lineno}, column {exc.colno}: {exc.msg}") from exc
-            if not isinstance(payload, dict):
-                raise ValueError("Formatted Request must be a JSON object")
-            return payload
+            except ValueError as exc:
+                raise ValueError(f"Invalid JSON: {exc}") from exc
+
+        def fireworks_staff_review_text(self, staff_ids):
+            if config.roster_path is None:
+                raise ValueError(
+                    "the external roster is required to review Fireworks staff identities")
+            roster = load_roster(config.roster_path, Path.cwd())
+            names = {
+                member.fireworks_staff_id: member.name
+                for member in roster.members
+                if member.fireworks_staff_id is not None
+            }
+            missing = [staff_id for staff_id in staff_ids if staff_id not in names]
+            if missing:
+                raise ValueError(
+                    "the roster has no name for Fireworks Staff ID: "
+                    + ", ".join(str(item) for item in missing))
+            return "\n".join(
+                f"  • {names[staff_id]} — Staff ID {staff_id}"
+                for staff_id in staff_ids)
 
         def submit_to_fireworks(self):
             if (self.record is None or fireworks_mappings is None
@@ -1134,17 +1155,26 @@ def main(argv=None) -> int:
                 return
             try:
                 payload = self.visible_fireworks_payload()
-                _generated, unresolved = self.generated_fireworks_request(self.record)
+                generated, unresolved = self.generated_fireworks_request(self.record)
+                expected_staff = tuple(generated.get("staff", ()))
                 errors = validate_fireworks_payload(
-                    payload, fireworks_mappings, unresolved)
+                    payload, fireworks_mappings, unresolved,
+                    expected_staff_ids=expected_staff)
                 if errors:
                     raise ValueError("\n".join(f"• {error}" for error in errors))
                 submission = self.record.get("fireworks_submission", {})
                 if (isinstance(submission, dict)
-                        and submission.get("status") in {"submitted", "unknown"}):
+                        and submission.get("status") in {
+                            "attempting", "submitted", "unknown"}):
                     raise DuplicateSubmissionError(
                         f"This record is already marked {submission.get('status')}")
                 fireworks_ledger.assert_may_submit(self.record, payload)
+                staff_review = self.fireworks_staff_review_text(payload["staff"])
+                canonical_text = json.dumps(
+                    payload, indent=2, ensure_ascii=False, allow_nan=False)
+                self.setting_formatted_request = True
+                self.formatted_request.setPlainText(canonical_text)
+                self.setting_formatted_request = False
             except (OSError, ValueError, DuplicateSubmissionError) as exc:
                 QtWidgets.QMessageBox.warning(
                     self, "Fireworks request is not ready", str(exc))
@@ -1164,9 +1194,34 @@ def main(argv=None) -> int:
                 f"Location: {location.name if location else payload.get('location')}\n"
                 f"Station: {fireworks_mappings.station_name} "
                 f"({fireworks_mappings.station_id})\n"
-                f"Participants: {len(payload.get('staff', []))}\n\n"
+                f"Participants ({len(payload.get('staff', []))}):\n"
+                f"{staff_review}\n\n"
                 "Submit this reviewed record now?")
             if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+                return
+
+            try:
+                reservation = fireworks_ledger.reserve(
+                    record=self.record, payload=payload,
+                    endpoint=self.fireworks_client.activity_url)
+                self.record["fireworks_submission"] = {
+                    "status": "attempting",
+                    "attempt_id": reservation["attempt_id"],
+                    "recorded_at": reservation["recorded_at"],
+                    "payload_sha256": reservation["payload_sha256"],
+                    "activity_id": None,
+                    "error": None,
+                }
+                automatic_export(self.record, args.export_dir)
+                self.persist_state()
+            except (OSError, ValueError, DuplicateSubmissionError) as exc:
+                QtWidgets.QMessageBox.critical(
+                    self, "Unable to reserve Fireworks attempt",
+                    "No network request was sent. The durable attempt reservation "
+                    "could not be fully recorded. If a reservation was appended to "
+                    "the ledger, it remains locked for manual reconciliation.\n\n"
+                    + str(exc))
+                self.display_record(self.record)
                 return
 
             self.fireworks_operation = "submit"
@@ -1174,6 +1229,8 @@ def main(argv=None) -> int:
                 "record": self.record,
                 "source": self.source,
                 "payload": payload,
+                "attempt_id": reservation["attempt_id"],
+                "endpoint": self.fireworks_client.activity_url,
             }
             self.fireworks_connection_status.setText("Submitting one request…")
             self.fireworks_future = self.executor.submit(
@@ -1182,12 +1239,19 @@ def main(argv=None) -> int:
             self.update_navigation()
 
         def persist_fireworks_outcome(
-                self, status, payload, *, response=None, error=None):
+                self, status, payload, *, attempt_id, endpoint,
+                response=None, response_status=None, response_text=None,
+                response_body_sha256=None, error=None):
             entry = fireworks_ledger.append(
                 record=self.record, payload=payload, status=status,
-                response=response, error=error)
+                attempt_id=attempt_id, endpoint=endpoint,
+                response=response, response_status=response_status,
+                response_text=response_text,
+                response_body_sha256=response_body_sha256,
+                error=error)
             self.record["fireworks_submission"] = {
                 "status": status,
+                "attempt_id": attempt_id,
                 "recorded_at": entry["recorded_at"],
                 "payload_sha256": entry["payload_sha256"],
                 "activity_id": entry["activity_id"],
@@ -1214,7 +1278,12 @@ def main(argv=None) -> int:
                 elif operation == "submit" and pending is not None:
                     self.record = pending["record"]
                     entry = self.persist_fireworks_outcome(
-                        "submitted", pending["payload"], response=result.payload)
+                        "submitted", pending["payload"],
+                        attempt_id=pending["attempt_id"],
+                        endpoint=pending["endpoint"], response=result.payload,
+                        response_status=result.status_code,
+                        response_text=result.text,
+                        response_body_sha256=result.body_sha256)
                     self.fireworks_connection_status.setText("Connected — activity submitted")
                     self.display_record(self.record)
                     activity = entry.get("activity_id")
@@ -1228,7 +1297,14 @@ def main(argv=None) -> int:
                     self.record = pending["record"]
                     try:
                         self.persist_fireworks_outcome(
-                            "unknown", pending["payload"], error=str(exc))
+                            "unknown", pending["payload"],
+                            attempt_id=pending["attempt_id"],
+                            endpoint=pending["endpoint"],
+                            response=exc.response_payload,
+                            response_status=exc.status_code,
+                            response_text=exc.response_text,
+                            response_body_sha256=exc.response_body_sha256,
+                            error=str(exc))
                     except OSError:
                         self.record["fireworks_submission"] = {
                             "status": "unknown", "error": str(exc)}
@@ -1241,7 +1317,14 @@ def main(argv=None) -> int:
                     self.record = pending["record"]
                     try:
                         self.persist_fireworks_outcome(
-                            "rejected", pending["payload"], error=str(exc))
+                            "rejected", pending["payload"],
+                            attempt_id=pending["attempt_id"],
+                            endpoint=pending["endpoint"],
+                            response=exc.response_payload,
+                            response_status=exc.status_code,
+                            response_text=exc.response_text,
+                            response_body_sha256=exc.response_body_sha256,
+                            error=str(exc))
                     except OSError:
                         pass
                     self.display_record(self.record)
@@ -1257,8 +1340,16 @@ def main(argv=None) -> int:
             except (OSError, ValueError) as exc:
                 if operation == "submit" and pending is not None:
                     self.record = pending["record"]
+                    reservation = self.record.get("fireworks_submission", {})
                     self.record["fireworks_submission"] = {
                         "status": "unknown",
+                        "attempt_id": pending["attempt_id"],
+                        "recorded_at": (
+                            reservation.get("recorded_at")
+                            if isinstance(reservation, dict) else None),
+                        "payload_sha256": (
+                            reservation.get("payload_sha256")
+                            if isinstance(reservation, dict) else None),
                         "error": (
                             "Fireworks responded, but the local receipt could not be "
                             "recorded: " + str(exc)),
@@ -1358,13 +1449,17 @@ def main(argv=None) -> int:
             self.setting_formatted_request = False
             self.formatted_request_dirty = False
             try:
-                self.sync_fireworks_controls(json.loads(request_text))
+                self.sync_fireworks_controls(parse_fireworks_request(request_text))
             except (json.JSONDecodeError, ValueError):
                 self.restore_fireworks_controls()
             submission = record.get("fireworks_submission", {})
             submission_status = (submission.get("status")
                                  if isinstance(submission, dict) else None)
-            if request_source == "draft":
+            if submission_status == "attempting":
+                self.set_formatted_request_message(
+                    "FIREWORKS ATTEMPT RESERVED — manually reconcile before any retry",
+                    "#8b1e1e")
+            elif request_source == "draft":
                 self.set_formatted_request_message(
                     "INVALID JSON DRAFT PRESERVED — correct it to save a request",
                     "#8b1e1e")
@@ -1377,6 +1472,10 @@ def main(argv=None) -> int:
                 self.set_formatted_request_message(
                     "FIREWORKS OUTCOME UNKNOWN — verify before any resubmission",
                     "#8b1e1e")
+            elif submission_status == "rejected":
+                self.set_formatted_request_message(
+                    "FIREWORKS REJECTED THIS ATTEMPT — correct and review before retry",
+                    "#8b5a00")
             elif request_source == "reviewed":
                 message = "Manual Formatted Request saved"
                 if unresolved_staff:

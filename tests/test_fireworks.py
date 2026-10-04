@@ -6,6 +6,7 @@ from fd_training_ocr.fireworks import (FireworksCategory, FireworksLocation,
                                        FireworksMappings, displayed_fireworks_request,
                                        fireworks_staff_ids, formatted_fireworks_request,
                                        load_fireworks_mappings, save_fireworks_request_edit,
+                                       parse_fireworks_request,
                                        selected_category_name, selected_location_name,
                                        update_payload_selection,
                                        validate_fireworks_payload)
@@ -159,6 +160,29 @@ class FireworksRequestTests(unittest.TestCase):
         self.assertIn("locationstr does not match location", errors)
         self.assertTrue(any("Instructor: Unknown" in error for error in errors))
 
+    def test_submission_validation_requires_exact_reviewed_staff_ids(self):
+        mappings = self.mappings()
+        record = {"fields": {
+            "date": {"reviewed_value": "09/19/26"},
+            "start_time": {"reviewed_value": "18:00"},
+            "end_time": {"reviewed_value": "19:00"},
+            "total_hours": {"reviewed_value": "1"},
+            "description": {"reviewed_value": "Reviewed training"},
+        }}
+        payload = formatted_fireworks_request(
+            record, (20, 26),
+            category=mappings.category_named("Company Training"),
+            location=mappings.location_named("Fire Station"), station_id=54)
+        self.assertEqual(
+            validate_fireworks_payload(
+                payload, mappings, expected_staff_ids=(20, 26)), ())
+
+        payload["staff"] = [20, 999999]
+        errors = validate_fireworks_payload(
+            payload, mappings, expected_staff_ids=(20, 26))
+        self.assertTrue(any("missing reviewed Staff ID 26" in error for error in errors))
+        self.assertTrue(any("unexpected Staff ID 999999" in error for error in errors))
+
     def test_external_mapping_file_is_strict_and_selects_only_submission_categories(self):
         with TemporaryDirectory() as name:
             path = Path(name) / "ids.json"
@@ -209,6 +233,28 @@ class FireworksRequestTests(unittest.TestCase):
             record, '{"staff":["JR7454"]}', "2026-09-19T12:00:00+00:00")
         self.assertFalse(valid)
         self.assertIn("numeric Fireworks IDs", error)
+
+    def test_formatted_request_rejects_duplicate_json_keys(self):
+        record = {}
+        valid, error = save_fireworks_request_edit(
+            record, '{"staff":[20],"staff":[999999]}',
+            "2026-09-19T12:00:00+00:00")
+        self.assertFalse(valid)
+        self.assertIn("duplicate JSON key", error)
+        self.assertNotIn("fireworks_request_review", record)
+
+    def test_formatted_request_rejects_non_finite_numbers(self):
+        record = {}
+        valid, error = save_fireworks_request_edit(
+            record, '{"staff":[20],"totalHours":NaN}',
+            "2026-09-19T12:00:00+00:00")
+        self.assertFalse(valid)
+        self.assertIn("non-finite JSON number", error)
+
+    def test_strict_request_parser_returns_the_exact_object(self):
+        self.assertEqual(
+            parse_fireworks_request('{"staff":[20],"assignTitle":"Reviewed"}'),
+            {"staff": [20], "assignTitle": "Reviewed"})
 
 
 if __name__ == "__main__":
