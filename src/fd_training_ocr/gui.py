@@ -121,6 +121,16 @@ def fireworks_resolution_warning(
     return " | ".join(warnings)
 
 
+def fireworks_readiness_message(
+        request_source: str, validation_errors: tuple[str, ...]) -> str:
+    """Describe whether the exact visible payload is ready for its final review."""
+    if validation_errors:
+        return "REQUEST NOT READY — " + " | ".join(validation_errors)
+    if request_source == "reviewed":
+        return "Formatted Request saved | READY TO SUBMIT"
+    return "READY TO SUBMIT"
+
+
 def roster_rows_with_instructor_ids(rows, mappings):
     """Prefill blank roster Instructor IDs from the external ID mapping."""
     enriched = []
@@ -1294,6 +1304,17 @@ def main(argv=None) -> int:
                 f"  • {names[item]} — Instructor ID {item}"
                 for item in instructor_ids)
 
+        def fireworks_payload_errors(self, payload, generated, unresolved):
+            if fireworks_mappings is None:
+                return ("Fireworks mappings are unavailable",)
+            unresolved_staff, unresolved_instructors = unresolved
+            return validate_fireworks_payload(
+                payload, fireworks_mappings, unresolved_staff,
+                expected_staff_ids=tuple(generated.get("staff", ())),
+                unresolved_instructors=unresolved_instructors,
+                expected_instructor_ids=tuple(
+                    generated.get("instructors", ())))
+
         def submit_to_fireworks(self):
             if (self.record is None or fireworks_mappings is None
                     or self.fireworks_client is None
@@ -1306,13 +1327,8 @@ def main(argv=None) -> int:
                 payload = self.visible_fireworks_payload()
                 generated, unresolved = self.generated_fireworks_request(self.record)
                 unresolved_staff, unresolved_instructors = unresolved
-                expected_staff = tuple(generated.get("staff", ()))
-                expected_instructors = tuple(generated.get("instructors", ()))
-                errors = validate_fireworks_payload(
-                    payload, fireworks_mappings, unresolved_staff,
-                    expected_staff_ids=expected_staff,
-                    unresolved_instructors=unresolved_instructors,
-                    expected_instructor_ids=expected_instructors)
+                errors = self.fireworks_payload_errors(
+                    payload, generated, unresolved)
                 if errors:
                     raise ValueError("\n".join(f"• {error}" for error in errors))
                 submission = self.record.get("fireworks_submission", {})
@@ -1646,8 +1662,11 @@ def main(argv=None) -> int:
                     self.set_formatted_request_message(
                         resolution_warning, "#8b5a00")
                 else:
+                    request_errors = self.fireworks_payload_errors(
+                        self.visible_fireworks_payload(), _payload, unresolved)
                     self.set_formatted_request_message(
-                        "Manual Formatted Request saved", "#286428")
+                        fireworks_readiness_message("reviewed", request_errors),
+                        "#8b5a00" if request_errors else "#286428")
                 if show_confirmation:
                     self.status.setText("Formatted Request saved; automatic export updated")
             else:
@@ -1723,10 +1742,16 @@ def main(argv=None) -> int:
             self.formatted_request.setPlainText(request_text)
             self.setting_formatted_request = False
             self.formatted_request_dirty = False
+            visible_payload = None
             try:
-                self.sync_fireworks_controls(parse_fireworks_request(request_text))
+                visible_payload = parse_fireworks_request(request_text)
+                self.sync_fireworks_controls(visible_payload)
             except (json.JSONDecodeError, ValueError):
                 self.restore_fireworks_controls()
+            request_errors = (
+                self.fireworks_payload_errors(
+                    visible_payload, generated, unresolved)
+                if visible_payload is not None else ())
             if ledger_warning:
                 self.set_formatted_request_message(
                     "SUBMISSION LEDGER ERROR — upload remains disabled until corrected: "
@@ -1771,11 +1796,13 @@ def main(argv=None) -> int:
             elif resolution_warning:
                 self.set_formatted_request_message(
                     resolution_warning, "#8b5a00")
-            elif request_source == "reviewed":
+            elif request_errors:
                 self.set_formatted_request_message(
-                    "Manual Formatted Request saved", "#286428")
+                    fireworks_readiness_message(request_source, request_errors),
+                    "#8b5a00")
             else:
-                self.set_formatted_request_message("")
+                self.set_formatted_request_message(
+                    fireworks_readiness_message(request_source, ()), "#286428")
             self.build_record_form(structured_rows(record))
             banner_text, banner_color = record_banner_state(record)
             self.set_record_banner(banner_text, banner_color or "#8b1e1e")

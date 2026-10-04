@@ -2,6 +2,7 @@ from concurrent.futures import Future
 import unittest
 
 from fd_training_ocr.gui import (fireworks_resolution_warning,
+                                 fireworks_readiness_message,
                                  fireworks_response_popup_text,
                                  record_banner_state,
                                  roster_rows_with_instructor_ids,
@@ -108,6 +109,27 @@ class FireworksResolutionWarningTests(unittest.TestCase):
 
     def test_empty_resolution_warning_is_hidden(self):
         self.assertEqual(fireworks_resolution_warning((), ()), "")
+
+
+class FireworksReadinessMessageTests(unittest.TestCase):
+    def test_generated_request_is_ready_when_validation_passes(self):
+        self.assertEqual(
+            fireworks_readiness_message("generated", ()),
+            "READY TO SUBMIT")
+
+    def test_saved_request_combines_saved_and_ready_status(self):
+        self.assertEqual(
+            fireworks_readiness_message("reviewed", ()),
+            "Formatted Request saved | READY TO SUBMIT")
+
+    def test_validation_errors_never_show_ready(self):
+        message = fireworks_readiness_message(
+            "reviewed", ("assignCat must be configured", "location is required"))
+
+        self.assertEqual(
+            message,
+            "REQUEST NOT READY — assignCat must be configured | location is required")
+        self.assertNotIn("READY TO SUBMIT", message)
 
 
 class RosterInstructorColumnTests(unittest.TestCase):
