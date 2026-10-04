@@ -575,7 +575,12 @@ def validate_fireworks_payload(
         expected_staff_ids: tuple[int, ...] | None = None,
         unresolved_instructors: tuple[str, ...] = (),
         expected_instructor_ids: tuple[int, ...] | None = None) -> tuple[str, ...]:
-    """Return all reasons the visible request is unsafe to submit."""
+    """Return all reasons the visible request is unsafe to submit.
+
+    Unresolved people are advisory: outside attendees and instructors may not
+    exist in Fireworks. They are omitted from the corresponding ID arrays and
+    surfaced by the GUI, but do not invalidate an otherwise safe payload.
+    """
     errors: list[str] = []
     if payload.get("moneln") is not None:
         errors.append("moneln must be null when creating a new activity")
@@ -630,8 +635,8 @@ def validate_fireworks_payload(
                 f"(received {received}; calculated {calculated})")
 
     staff = payload.get("staff")
-    if not isinstance(staff, list) or not staff:
-        errors.append("staff must contain at least one Fireworks Staff ID")
+    if not isinstance(staff, list):
+        errors.append("staff must be an array of Fireworks Staff IDs")
     elif any(isinstance(item, bool) or not isinstance(item, int) or item <= 0
              for item in staff):
         errors.append("staff must contain only positive numeric Fireworks Staff IDs")
@@ -652,8 +657,6 @@ def validate_fireworks_payload(
         errors.append(
             f"attendance must equal the number of staff IDs ({len(staff)})")
 
-    if unresolved_staff:
-        errors.append("unresolved Fireworks Staff ID: " + ", ".join(unresolved_staff))
     instructors = payload.get("instructors")
     if not isinstance(instructors, list):
         errors.append("instructors must be an array of Fireworks Instructor IDs")
@@ -677,10 +680,6 @@ def validate_fireworks_payload(
             for instructor_id in sorted(actual - expected):
                 errors.append(
                     f"instructors contains unexpected Instructor ID {instructor_id}")
-    if unresolved_instructors:
-        errors.append(
-            "unresolved Fireworks Instructor ID: "
-            + ", ".join(unresolved_instructors))
     return tuple(errors)
 
 

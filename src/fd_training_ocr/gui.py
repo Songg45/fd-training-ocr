@@ -1275,6 +1275,13 @@ def main(argv=None) -> int:
                     f"  • {fireworks_mappings.instructor_with_id(item).name} "
                     f"— Instructor ID {item}"
                     for item in payload["instructors"])
+                resolution_warning = fireworks_resolution_warning(
+                    unresolved_staff, unresolved_instructors)
+                omitted_people_notice = (
+                    "\n\nWARNING — these people have no configured Fireworks ID "
+                    "and are not included in the request:\n"
+                    + resolution_warning
+                    if resolution_warning else "")
                 canonical_text = json.dumps(
                     payload, indent=2, ensure_ascii=False, allow_nan=False)
                 self.setting_formatted_request = True
@@ -1302,7 +1309,8 @@ def main(argv=None) -> int:
                 f"Instructors ({len(payload.get('instructors', []))}):\n"
                 f"{instructor_review or '  • None'}\n"
                 f"Participants ({len(payload.get('staff', []))}):\n"
-                f"{staff_review}\n\n"
+                f"{staff_review or '  • None'}"
+                f"{omitted_people_notice}\n\n"
                 "Submit this reviewed record now?")
             if answer != QtWidgets.QMessageBox.StandardButton.Yes:
                 return

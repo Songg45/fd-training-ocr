@@ -174,7 +174,7 @@ class FireworksRequestTests(unittest.TestCase):
         errors = validate_fireworks_payload(
             payload, mappings, ("Instructor: Unknown",))
         self.assertIn("locationstr does not match location", errors)
-        self.assertTrue(any("Instructor: Unknown" in error for error in errors))
+        self.assertFalse(any("Instructor: Unknown" in error for error in errors))
 
     def test_submission_validation_rejects_total_hours_that_disagree_with_interval(self):
         mappings = self.mappings()
@@ -286,7 +286,30 @@ class FireworksRequestTests(unittest.TestCase):
             payload, mappings, unresolved_instructors=("Instructor: Unknown",),
             expected_instructor_ids=())
         self.assertIn("instructors contains unconfigured Instructor ID 999", errors)
-        self.assertTrue(any("Instructor: Unknown" in error for error in errors))
+        self.assertFalse(any("Instructor: Unknown" in error for error in errors))
+
+    def test_unresolved_people_and_empty_id_arrays_do_not_block_submission(self):
+        mappings = self.mappings()
+        record = {"fields": {
+            "date": {"reviewed_value": "09/19/26"},
+            "start_time": {"reviewed_value": "18:00"},
+            "end_time": {"reviewed_value": "19:00"},
+            "total_hours": {"reviewed_value": "1"},
+            "description": {"reviewed_value": "Outside department training"},
+        }}
+        payload = formatted_fireworks_request(
+            record, (), category=mappings.category_named("Outside Department Training"),
+            location=mappings.location_named("Fire Station"),
+            instructor_ids=(), station_id=54)
+
+        self.assertEqual(payload["staff"], [])
+        self.assertEqual(payload["attendance"], 0)
+        self.assertEqual(payload["instructors"], [])
+        self.assertEqual(validate_fireworks_payload(
+            payload, mappings, ("Outside Attendee",),
+            expected_staff_ids=(),
+            unresolved_instructors=("Instructor: Outside Instructor",),
+            expected_instructor_ids=()), ())
 
     def test_external_mapping_file_is_strict_and_selects_only_submission_categories(self):
         with TemporaryDirectory() as name:
