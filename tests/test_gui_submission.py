@@ -1,7 +1,8 @@
 from concurrent.futures import Future
 import unittest
 
-from fd_training_ocr.gui import (fireworks_response_popup_text,
+from fd_training_ocr.gui import (fireworks_resolution_warning,
+                                 fireworks_response_popup_text,
                                  record_banner_state,
                                  submission_close_action)
 
@@ -81,6 +82,29 @@ class RecordBannerTests(unittest.TestCase):
 
     def test_completed_unsubmitted_record_has_no_banner(self):
         self.assertEqual(record_banner_state({"status": "complete"}), ("", ""))
+
+
+class FireworksResolutionWarningTests(unittest.TestCase):
+    def test_combines_unresolved_staff_and_instructor(self):
+        self.assertEqual(
+            fireworks_resolution_warning(
+                ("Outside Member",), ("Instructor: Visiting Instructor",)),
+            "Fireworks Staff ID unresolved for: Outside Member | "
+            "Fireworks Instructor ID unresolved for: Visiting Instructor",
+        )
+
+    def test_shows_only_the_unresolved_group(self):
+        self.assertEqual(
+            fireworks_resolution_warning((), ("Instructor: Outside Trainer",)),
+            "Fireworks Instructor ID unresolved for: Outside Trainer",
+        )
+        self.assertEqual(
+            fireworks_resolution_warning(("Outside Member",), ()),
+            "Fireworks Staff ID unresolved for: Outside Member",
+        )
+
+    def test_empty_resolution_warning_is_hidden(self):
+        self.assertEqual(fireworks_resolution_warning((), ()), "")
 
 
 if __name__ == "__main__":

@@ -104,6 +104,23 @@ def record_banner_state(record: dict) -> tuple[str, str]:
     return "", ""
 
 
+def fireworks_resolution_warning(
+        unresolved_staff: tuple[str, ...],
+        unresolved_instructors: tuple[str, ...]) -> str:
+    """Combine unresolved participant and instructor IDs for one warning box."""
+    warnings: list[str] = []
+    if unresolved_staff:
+        warnings.append(
+            "Fireworks Staff ID unresolved for: " + ", ".join(unresolved_staff))
+    if unresolved_instructors:
+        instructor_names = tuple(
+            item.removeprefix("Instructor: ") for item in unresolved_instructors)
+        warnings.append(
+            "Fireworks Instructor ID unresolved for: "
+            + ", ".join(instructor_names))
+    return " | ".join(warnings)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="fd-training-ocr-gui")
     parser.add_argument("--config", type=Path)
@@ -1566,14 +1583,14 @@ def main(argv=None) -> int:
                     pass
                 _payload, unresolved = self.generated_fireworks_request(self.record)
                 unresolved_staff, unresolved_instructors = unresolved
-                message = "Manual Formatted Request saved"
-                if unresolved_staff:
-                    message += "; unresolved roster attendee(s): " + ", ".join(
-                        unresolved_staff)
-                if unresolved_instructors:
-                    message += "; unresolved instructor(s): " + ", ".join(
-                        unresolved_instructors)
-                self.set_formatted_request_message(message, "#286428")
+                resolution_warning = fireworks_resolution_warning(
+                    unresolved_staff, unresolved_instructors)
+                if resolution_warning:
+                    self.set_formatted_request_message(
+                        resolution_warning, "#8b5a00")
+                else:
+                    self.set_formatted_request_message(
+                        "Manual Formatted Request saved", "#286428")
                 if show_confirmation:
                     self.status.setText("Formatted Request saved; automatic export updated")
             else:
@@ -1626,6 +1643,8 @@ def main(argv=None) -> int:
             self.fireworks_ledger_error = ledger_warning
             generated, unresolved = self.generated_fireworks_request(record)
             unresolved_staff, unresolved_instructors = unresolved
+            resolution_warning = fireworks_resolution_warning(
+                unresolved_staff, unresolved_instructors)
             submission = record.get("fireworks_submission", {})
             submission_status = (submission.get("status")
                                  if isinstance(submission, dict) else None)
@@ -1692,22 +1711,12 @@ def main(argv=None) -> int:
                     "Resolved instructor added to Formatted Request as Instructor "
                     f"ID {instructor_ids}; verify the exact payload before submission",
                     "#8b5a00")
+            elif resolution_warning:
+                self.set_formatted_request_message(
+                    resolution_warning, "#8b5a00")
             elif request_source == "reviewed":
-                message = "Manual Formatted Request saved"
-                if unresolved_staff:
-                    message += "; unresolved roster attendee(s): " + ", ".join(
-                        unresolved_staff)
-                if unresolved_instructors:
-                    message += "; unresolved instructor(s): " + ", ".join(
-                        unresolved_instructors)
-                self.set_formatted_request_message(message, "#286428")
-            elif unresolved_staff:
                 self.set_formatted_request_message(
-                    "Fireworks Staff ID unresolved for: " + ", ".join(unresolved_staff))
-            elif unresolved_instructors:
-                self.set_formatted_request_message(
-                    "Fireworks Instructor ID unresolved for: "
-                    + ", ".join(unresolved_instructors))
+                    "Manual Formatted Request saved", "#286428")
             else:
                 self.set_formatted_request_message("")
             self.build_record_form(structured_rows(record))
