@@ -21,6 +21,11 @@ from .fireworks import fireworks_payload_hash, parse_fireworks_request
 FIREWORKS_API_BASE = "https://webtrainingapi.eprsys.com/api"
 FIREWORKS_API_HOST = "webtrainingapi.eprsys.com"
 DEFINITE_REJECTION_STATUSES = frozenset({400, 401, 403, 422})
+LEDGER_STATUSES = frozenset({
+    "attempting", "submitted", "rejected", "unknown",
+    "reconciled_not_submitted",
+})
+LOCKED_SUBMISSION_STATUSES = frozenset({"attempting", "submitted", "unknown"})
 
 
 class FireworksError(RuntimeError):
@@ -343,44 +348,72 @@ class SubmissionLedger:
             except (json.JSONDecodeError, ValueError) as exc:
                 raise ValueError(
                     f"submission ledger line {line_number} is invalid JSON") from exc
-            if item.get("status") not in {
-                    "attempting", "submitted", "rejected", "unknown"}:
+            if item.get("status") not in LEDGER_STATUSES:
                 raise ValueError(
                     f"submission ledger line {line_number} has an invalid status")
             result.append(dict(item))
         return tuple(result)
+
+    def _effective_entries(self) -> tuple[Mapping[str, Any], ...]:
+        """Return the latest append-only state for each identified attempt."""
+        identified: dict[str, tuple[int, Mapping[str, Any]]] = {}
+        legacy: list[tuple[int, Mapping[str, Any]]] = []
+        for line_number, entry in enumerate(self.entries(), 1):
+            attempt_id = str(entry.get("attempt_id") or "").strip()
+            if attempt_id:
+                identified[attempt_id] = (line_number, entry)
+            else:
+                legacy.append((line_number, entry))
+        states = [*legacy, *identified.values()]
+        states.sort(key=lambda item: item[0])
+        return tuple(entry for _line_number, entry in states)
+
+    @staticmethod
+    def _matches(
+            entry: Mapping[str, Any], *, source_sha256: str,
+            page: int | None, payload_sha256: str | None = None,
+            fingerprint: str | None = None) -> bool:
+        same_source = (entry.get("source_sha256") == source_sha256
+                       and entry.get("page") == page)
+        same_payload = (payload_sha256 is not None
+                        and entry.get("payload_sha256") == payload_sha256)
+        same_activity = (fingerprint is not None
+                         and entry.get("activity_fingerprint") == fingerprint)
+        return same_source or same_payload or same_activity
+
+    def effective_entry(
+            self, record: Mapping[str, Any],
+            payload: Mapping[str, Any] | None = None) -> Mapping[str, Any] | None:
+        """Return the authoritative ledger state relevant to one record."""
+        digest, page = _record_identity(record)
+        payload_digest = fireworks_payload_hash(payload) if payload is not None else None
+        fingerprint = activity_fingerprint(payload) if payload is not None else None
+        matches = [
+            entry for entry in self._effective_entries()
+            if self._matches(
+                entry, source_sha256=digest, page=page,
+                payload_sha256=payload_digest, fingerprint=fingerprint)
+        ]
+        locked = [
+            entry for entry in matches
+            if entry.get("status") in LOCKED_SUBMISSION_STATUSES]
+        candidates = locked or matches
+        return dict(candidates[-1]) if candidates else None
 
     def assert_may_submit(
             self, record: Mapping[str, Any], payload: Mapping[str, Any]) -> None:
         digest, page = _record_identity(record)
         payload_digest = fireworks_payload_hash(payload)
         fingerprint = activity_fingerprint(payload)
-        pending: dict[str, Mapping[str, Any]] = {}
-        permanently_locked: list[Mapping[str, Any]] = []
-        for line_number, entry in enumerate(self.entries(), 1):
-            status = entry.get("status")
-            attempt_id = str(entry.get("attempt_id") or "").strip()
-            if status == "attempting":
-                if attempt_id:
-                    pending[attempt_id] = entry
-                else:
-                    # A legacy or damaged reservation cannot safely be assumed complete.
-                    pending[f"ledger-line-{line_number}"] = entry
-            elif status == "rejected":
-                if attempt_id:
-                    pending.pop(attempt_id, None)
-            elif status in {"submitted", "unknown"}:
-                if attempt_id:
-                    pending.pop(attempt_id, None)
-                permanently_locked.append(entry)
-
-        for entry in (*permanently_locked, *pending.values()):
-            same_source = (entry.get("source_sha256") == digest
-                           and entry.get("page") == page)
-            same_payload = entry.get("payload_sha256") == payload_digest
-            same_activity = (fingerprint is not None
-                             and entry.get("activity_fingerprint") == fingerprint)
-            if same_source or same_payload or same_activity:
+        for entry in self._effective_entries():
+            if (entry.get("status") in LOCKED_SUBMISSION_STATUSES
+                    and self._matches(
+                        entry, source_sha256=digest, page=page,
+                        payload_sha256=payload_digest,
+                        fingerprint=fingerprint)):
+                same_payload = entry.get("payload_sha256") == payload_digest
+                same_activity = (fingerprint is not None
+                                 and entry.get("activity_fingerprint") == fingerprint)
                 if same_payload:
                     prior = "the same payload"
                 elif same_activity:
@@ -409,8 +442,9 @@ class SubmissionLedger:
             recorded_at: str | None = None, attempt_id: str | None = None,
             endpoint: str | None = None, response_status: int | None = None,
             response_text: str | None = None,
-            response_body_sha256: str | None = None) -> Mapping[str, Any]:
-        if status not in {"attempting", "submitted", "rejected", "unknown"}:
+            response_body_sha256: str | None = None,
+            reconciliation: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
+        if status not in LEDGER_STATUSES:
             raise ValueError("invalid Fireworks submission status")
         if status == "attempting" and not str(attempt_id or "").strip():
             raise ValueError("attempting ledger entries require an attempt ID")
@@ -438,6 +472,8 @@ class SubmissionLedger:
             "response": response_payload,
             "response_text": response_text,
             "response_body_sha256": response_body_sha256,
+            "reconciliation": (
+                dict(reconciliation) if isinstance(reconciliation, Mapping) else None),
             "error": error,
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -448,3 +484,104 @@ class SubmissionLedger:
             stream.flush()
             os.fsync(stream.fileno())
         return entry
+
+
+class SubmissionCoordinator:
+    """Coordinate durable ledger transitions with the record shown by the GUI."""
+
+    def __init__(self, ledger: SubmissionLedger):
+        self.ledger = ledger
+
+    @staticmethod
+    def _record_state(entry: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            "status": entry.get("status"),
+            "attempt_id": entry.get("attempt_id"),
+            "recorded_at": entry.get("recorded_at"),
+            "payload_sha256": entry.get("payload_sha256"),
+            "activity_id": entry.get("activity_id"),
+            "error": entry.get("error"),
+            "reconciliation": entry.get("reconciliation"),
+        }
+
+    def reconcile_record(
+            self, record: dict[str, Any]) -> tuple[bool, Mapping[str, Any] | None]:
+        """Apply the authoritative ledger state to a possibly stale record."""
+        entry = self.ledger.effective_entry(record)
+        if entry is None:
+            return False, None
+        state = self._record_state(entry)
+        changed = record.get("fireworks_submission") != state
+        if changed:
+            record["fireworks_submission"] = state
+        return changed, entry
+
+    def reserve(
+            self, *, record: dict[str, Any], payload: Mapping[str, Any],
+            endpoint: str, recorded_at: str | None = None) -> Mapping[str, Any]:
+        entry = self.ledger.reserve(
+            record=record, payload=payload, endpoint=endpoint,
+            recorded_at=recorded_at)
+        record["fireworks_submission"] = self._record_state(entry)
+        return entry
+
+    def finalize(
+            self, *, record: dict[str, Any], payload: Mapping[str, Any],
+            status: str, attempt_id: str, endpoint: str,
+            response: Mapping[str, Any] | None = None,
+            response_status: int | None = None,
+            response_text: str | None = None,
+            response_body_sha256: str | None = None,
+            error: str | None = None,
+            reconciliation: Mapping[str, Any] | None = None,
+            recorded_at: str | None = None) -> Mapping[str, Any]:
+        entry = self.ledger.append(
+            record=record, payload=payload, status=status,
+            attempt_id=attempt_id, endpoint=endpoint,
+            response=response, response_status=response_status,
+            response_text=response_text,
+            response_body_sha256=response_body_sha256,
+            error=error, reconciliation=reconciliation,
+            recorded_at=recorded_at)
+        record["fireworks_submission"] = self._record_state(entry)
+        return entry
+
+    def manual_reconcile(
+            self, *, record: dict[str, Any], created: bool,
+            activity_id: int | None = None,
+            recorded_at: str | None = None) -> Mapping[str, Any]:
+        """Audit a human's direct verification of an indeterminate attempt."""
+        prior = self.ledger.effective_entry(record)
+        if prior is None or prior.get("status") not in {"attempting", "unknown"}:
+            raise ValueError("this record has no indeterminate attempt to reconcile")
+        attempt_id = str(prior.get("attempt_id") or "").strip()
+        payload = prior.get("payload")
+        if not attempt_id or not isinstance(payload, Mapping):
+            raise ValueError("the ledger attempt lacks an ID or preserved payload")
+        if created:
+            if (isinstance(activity_id, bool) or not isinstance(activity_id, int)
+                    or activity_id <= 0):
+                raise ValueError("a positive activity ID is required")
+            status = "submitted"
+            response = {
+                "manual_reconciliation": True,
+                "activityId": activity_id,
+            }
+            error = None
+            decision = "confirmed_submitted"
+        else:
+            status = "reconciled_not_submitted"
+            response = None
+            error = "Manual reconciliation confirmed no activity was created"
+            decision = "confirmed_not_submitted"
+        return self.finalize(
+            record=record, payload=payload, status=status,
+            attempt_id=attempt_id,
+            endpoint=str(prior.get("endpoint") or FIREWORKS_API_BASE),
+            response=response, error=error,
+            reconciliation={
+                "decision": decision,
+                "prior_status": prior.get("status"),
+                "review_method": "reviewer checked Fireworks directly",
+            },
+            recorded_at=recorded_at)

@@ -209,6 +209,15 @@ class FireworksRequestTests(unittest.TestCase):
              "Outside Department Training"])
         self.assertEqual(mappings.station_id, 54)
 
+    def test_external_mapping_rejects_duplicate_json_keys(self):
+        with TemporaryDirectory() as name:
+            path = Path(name) / "ids.json"
+            path.write_text(
+                '{"schema_version":1,"schema_version":1}',
+                encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
+                load_fireworks_mappings(path)
+
     def test_formatted_request_edits_and_invalid_drafts_are_persistent(self):
         record = {}
         valid, error = save_fireworks_request_edit(

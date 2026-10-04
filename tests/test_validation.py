@@ -13,6 +13,17 @@ def result(name, value, confidence=.99, alternatives=()):
 
 
 class RosterTests(unittest.TestCase):
+    def test_external_roster_rejects_duplicate_json_keys(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "repo"
+            root.mkdir()
+            roster_path = Path(temp) / "roster.json"
+            roster_path.write_text(
+                '{"schema_version":1,"schema_version":1,"members":[]}',
+                encoding="utf-8")
+            with self.assertRaisesRegex(RosterError, "duplicate JSON key"):
+                load_roster(roster_path, root)
+
     def test_exact_member_lookup_links_name_alias_and_unit(self):
         member = RosterMember("Nick Sledge", ("4354",), ("Nicholas Sledge",))
         roster = Roster((member,))

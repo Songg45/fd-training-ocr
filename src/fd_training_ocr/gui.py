@@ -39,7 +39,9 @@ from .fireworks_client import (DuplicateSubmissionError, FireworksClient,
                                FIREWORKS_API_BASE,
                                FireworksConnectionError,
                                FireworksSubmissionRejected,
-                               FireworksSubmissionUnknown, SubmissionLedger)
+                               FireworksSubmissionUnknown,
+                               LOCKED_SUBMISSION_STATUSES,
+                               SubmissionCoordinator, SubmissionLedger)
 from .validation import load_roster
 
 
@@ -49,6 +51,13 @@ def _qt():
     except ImportError as exc:
         raise RuntimeError("PySide6 is required; install with: python -m pip install -e .[gui]") from exc
     return QtCore, QtGui, QtWidgets
+
+
+def submission_close_action(future: Future | None) -> str:
+    """Return whether close may proceed or an API future needs attention."""
+    if future is None:
+        return "close"
+    return "finalize" if future.done() else "wait"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -85,6 +94,7 @@ def main(argv=None) -> int:
             fireworks_mappings = None
             fireworks_mapping_warning = str(exc)
         fireworks_ledger = SubmissionLedger(args.fireworks_ledger)
+        fireworks_submissions = SubmissionCoordinator(fireworks_ledger)
         backup_warning = None
         try:
             create_startup_backup(
@@ -135,6 +145,7 @@ def main(argv=None) -> int:
             self.fireworks_operation = None
             self.fireworks_pending = None
             self.fireworks_client = None
+            self.fireworks_ledger_error = None
             self.processing_source = None
             self.batch_queue = []
             self.batch_total = 0
@@ -288,11 +299,16 @@ def main(argv=None) -> int:
             self.connect_fireworks_button.setAccessibleName("Connect to Fireworks")
             self.submit_fireworks_button = QtWidgets.QPushButton("Submit to Fireworks")
             self.submit_fireworks_button.setAccessibleName("Submit to Fireworks")
+            self.reconcile_fireworks_button = QtWidgets.QPushButton("Reconcile Attempt")
+            self.reconcile_fireworks_button.setAccessibleName("Reconcile Fireworks Attempt")
+            self.reconcile_fireworks_button.setAccessibleDescription(
+                "Record the result after checking an uncertain attempt directly in Fireworks")
             self.fireworks_connection_status = QtWidgets.QLabel("Not connected")
             formatted_controls.addWidget(self.save_formatted_request_button)
             formatted_controls.addWidget(self.regenerate_formatted_request_button)
             formatted_controls.addWidget(self.connect_fireworks_button)
             formatted_controls.addWidget(self.submit_fireworks_button)
+            formatted_controls.addWidget(self.reconcile_fireworks_button)
             formatted_controls.addWidget(self.fireworks_connection_status)
             formatted_controls.addStretch(1)
             formatted_layout.addLayout(fireworks_fields)
@@ -323,6 +339,8 @@ def main(argv=None) -> int:
                 self.fireworks_selector_changed)
             self.connect_fireworks_button.clicked.connect(self.connect_to_fireworks)
             self.submit_fireworks_button.clicked.connect(self.submit_to_fireworks)
+            self.reconcile_fireworks_button.clicked.connect(
+                self.reconcile_fireworks_attempt)
             self.load_button.triggered.connect(self.load_pdfs)
             self.folder_button.triggered.connect(self.load_folder)
             self.roster_button.triggered.connect(self.show_roster)
@@ -1070,8 +1088,11 @@ def main(argv=None) -> int:
             submission = (self.record.get("fireworks_submission", {})
                           if isinstance(self.record, dict) else {})
             locked = (isinstance(submission, dict)
-                      and submission.get("status") in {
-                          "attempting", "submitted", "unknown"})
+                      and submission.get("status") in LOCKED_SUBMISSION_STATUSES)
+            reconcilable = (isinstance(submission, dict)
+                            and submission.get("status") in {
+                                "attempting", "unknown"})
+            ledger_ready = self.fireworks_ledger_error is None
             mappings_ready = fireworks_mappings is not None
             self.fireworks_category.setEnabled(
                 idle and self.record is not None and mappings_ready and not locked)
@@ -1079,9 +1100,12 @@ def main(argv=None) -> int:
                 idle and self.record is not None and mappings_ready and not locked)
             self.connect_fireworks_button.setEnabled(idle)
             self.submit_fireworks_button.setEnabled(
-                idle and self.record is not None and mappings_ready and not locked
+                idle and ledger_ready and self.record is not None
+                and mappings_ready and not locked
                 and self.fireworks_client is not None
                 and self.fireworks_client.connected)
+            self.reconcile_fireworks_button.setEnabled(
+                idle and ledger_ready and reconcilable)
             self.save_formatted_request_button.setEnabled(
                 idle and self.record is not None and not locked)
             self.regenerate_formatted_request_button.setEnabled(
@@ -1164,8 +1188,7 @@ def main(argv=None) -> int:
                     raise ValueError("\n".join(f"• {error}" for error in errors))
                 submission = self.record.get("fireworks_submission", {})
                 if (isinstance(submission, dict)
-                        and submission.get("status") in {
-                            "attempting", "submitted", "unknown"}):
+                        and submission.get("status") in LOCKED_SUBMISSION_STATUSES):
                     raise DuplicateSubmissionError(
                         f"This record is already marked {submission.get('status')}")
                 fireworks_ledger.assert_may_submit(self.record, payload)
@@ -1201,17 +1224,9 @@ def main(argv=None) -> int:
                 return
 
             try:
-                reservation = fireworks_ledger.reserve(
+                reservation = fireworks_submissions.reserve(
                     record=self.record, payload=payload,
                     endpoint=self.fireworks_client.activity_url)
-                self.record["fireworks_submission"] = {
-                    "status": "attempting",
-                    "attempt_id": reservation["attempt_id"],
-                    "recorded_at": reservation["recorded_at"],
-                    "payload_sha256": reservation["payload_sha256"],
-                    "activity_id": None,
-                    "error": None,
-                }
                 automatic_export(self.record, args.export_dir)
                 self.persist_state()
             except (OSError, ValueError, DuplicateSubmissionError) as exc:
@@ -1242,21 +1257,13 @@ def main(argv=None) -> int:
                 self, status, payload, *, attempt_id, endpoint,
                 response=None, response_status=None, response_text=None,
                 response_body_sha256=None, error=None):
-            entry = fireworks_ledger.append(
+            entry = fireworks_submissions.finalize(
                 record=self.record, payload=payload, status=status,
                 attempt_id=attempt_id, endpoint=endpoint,
                 response=response, response_status=response_status,
                 response_text=response_text,
                 response_body_sha256=response_body_sha256,
                 error=error)
-            self.record["fireworks_submission"] = {
-                "status": status,
-                "attempt_id": attempt_id,
-                "recorded_at": entry["recorded_at"],
-                "payload_sha256": entry["payload_sha256"],
-                "activity_id": entry["activity_id"],
-                "error": error,
-            }
             automatic_export(self.record, args.export_dir)
             self.persist_state()
             return entry
@@ -1366,6 +1373,82 @@ def main(argv=None) -> int:
             finally:
                 self.update_navigation()
 
+        def reconcile_fireworks_attempt(self):
+            if self.record is None or self.fireworks_future is not None or self.busy:
+                return
+            try:
+                entry = fireworks_ledger.effective_entry(self.record)
+            except (OSError, ValueError) as exc:
+                QtWidgets.QMessageBox.critical(
+                    self, "Unable to read submission ledger", str(exc))
+                return
+            if entry is None or entry.get("status") not in {"attempting", "unknown"}:
+                QtWidgets.QMessageBox.information(
+                    self, "No attempt to reconcile",
+                    "The ledger has no uncertain attempt for this record.")
+                return
+
+            dialog = QtWidgets.QMessageBox(self)
+            dialog.setWindowTitle("Reconcile Fireworks attempt")
+            dialog.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+            dialog.setText(
+                "Check Fireworks directly before choosing an outcome. This action "
+                "will be appended to the audit ledger and cannot be erased.")
+            dialog.setInformativeText(
+                f"Attempt ID: {entry.get('attempt_id')}\n"
+                f"Prior state: {entry.get('status')}\n"
+                f"Recorded: {entry.get('recorded_at')}")
+            found_button = dialog.addButton(
+                "Found — Mark Submitted",
+                QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+            absent_button = dialog.addButton(
+                "Confirmed Not Created — Release",
+                QtWidgets.QMessageBox.ButtonRole.DestructiveRole)
+            dialog.addButton(QtWidgets.QMessageBox.StandardButton.Cancel)
+            dialog.exec()
+            clicked = dialog.clickedButton()
+            if clicked is not found_button and clicked is not absent_button:
+                return
+
+            created = clicked is found_button
+            activity_id = None
+            if created:
+                activity_id, accepted = QtWidgets.QInputDialog.getInt(
+                    self, "Fireworks activity ID",
+                    "Enter the positive activity ID shown in Fireworks:",
+                    value=1, minValue=1, maxValue=2147483647)
+                if not accepted:
+                    return
+            else:
+                answer = QtWidgets.QMessageBox.question(
+                    self, "Release this attempt?",
+                    "Confirm that you searched Fireworks and this attempt did not "
+                    "create an activity. The record will be released for correction "
+                    "and another explicitly reviewed attempt.")
+                if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+                    return
+
+            try:
+                result = fireworks_submissions.manual_reconcile(
+                    record=self.record, created=created,
+                    activity_id=activity_id)
+                automatic_export(self.record, args.export_dir)
+                self.persist_state()
+                self.display_record(self.record)
+            except (OSError, ValueError) as exc:
+                QtWidgets.QMessageBox.critical(
+                    self, "Unable to reconcile attempt", str(exc))
+                return
+            if result.get("status") == "submitted":
+                QtWidgets.QMessageBox.information(
+                    self, "Attempt reconciled",
+                    f"Recorded as submitted activity {result.get('activity_id')}.")
+            else:
+                QtWidgets.QMessageBox.information(
+                    self, "Attempt released",
+                    "The audit ledger records that no activity was created. The "
+                    "record may now be corrected and reviewed again.")
+
         def formatted_request_edited(self):
             if not self.setting_formatted_request and self.record is not None:
                 self.formatted_request_dirty = True
@@ -1441,6 +1524,15 @@ def main(argv=None) -> int:
                     self, "Unable to regenerate Formatted Request", str(exc))
 
         def display_record(self, record):
+            ledger_warning = None
+            try:
+                reconciled, _entry = fireworks_submissions.reconcile_record(record)
+                if reconciled:
+                    automatic_export(record, args.export_dir)
+                    self.persist_state()
+            except (OSError, ValueError) as exc:
+                ledger_warning = str(exc)
+            self.fireworks_ledger_error = ledger_warning
             self.raw.setPlainText(json.dumps(record, indent=2, ensure_ascii=False))
             generated, unresolved_staff = self.generated_fireworks_request(record)
             request_text, request_source = displayed_fireworks_request(record, generated)
@@ -1455,7 +1547,11 @@ def main(argv=None) -> int:
             submission = record.get("fireworks_submission", {})
             submission_status = (submission.get("status")
                                  if isinstance(submission, dict) else None)
-            if submission_status == "attempting":
+            if ledger_warning:
+                self.set_formatted_request_message(
+                    "SUBMISSION LEDGER ERROR — upload remains disabled until corrected: "
+                    + ledger_warning, "#8b1e1e")
+            elif submission_status == "attempting":
                 self.set_formatted_request_message(
                     "FIREWORKS ATTEMPT RESERVED — manually reconcile before any retry",
                     "#8b1e1e")
@@ -1476,6 +1572,10 @@ def main(argv=None) -> int:
                 self.set_formatted_request_message(
                     "FIREWORKS REJECTED THIS ATTEMPT — correct and review before retry",
                     "#8b5a00")
+            elif submission_status == "reconciled_not_submitted":
+                self.set_formatted_request_message(
+                    "MANUALLY RECONCILED — no activity was created; ready for review",
+                    "#286428")
             elif request_source == "reviewed":
                 message = "Manual Formatted Request saved"
                 if unresolved_staff:
@@ -1671,10 +1771,15 @@ def main(argv=None) -> int:
         def closeEvent(self, event):
             if self.future is not None and not self.future.done():
                 event.ignore(); QtWidgets.QMessageBox.information(self, "Processing", "Wait for local OCR to finish before closing."); return
-            if self.fireworks_future is not None and not self.fireworks_future.done():
+            close_action = submission_close_action(self.fireworks_future)
+            if close_action == "wait":
                 event.ignore(); QtWidgets.QMessageBox.information(
                     self, "Fireworks request in progress",
                     "Wait for the current Fireworks operation to finish before closing."); return
+            if close_action == "finalize":
+                event.ignore()
+                self.poll_fireworks_result()
+                return
             if self.record is not None:
                 try:
                     self.save_formatted_request()

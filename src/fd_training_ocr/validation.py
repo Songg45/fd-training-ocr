@@ -12,6 +12,7 @@ from typing import Iterable, Mapping
 from .normalization import (NormalizedValue, normalize_aliased_allowlisted, normalize_date,
                             normalize_hours, normalize_time)
 from .recognition import RecognitionResult
+from .strict_json import parse_json_object
 
 
 class RosterError(ValueError): pass
@@ -76,9 +77,10 @@ def load_roster(path: Path, repository_root: Path) -> Roster:
         resolved, root = path.resolve(strict=True), repository_root.resolve(strict=True)
         if resolved == root or root in resolved.parents:
             raise RosterError("roster path must be outside the Git repository")
-        payload = json.loads(resolved.read_text(encoding="utf-8"))
+        payload = parse_json_object(
+            resolved.read_text(encoding="utf-8"), object_name="roster")
     except RosterError: raise
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
         raise RosterError(f"could not read valid roster JSON: {exc}") from exc
     if not isinstance(payload, dict) or set(payload) != {"schema_version", "members"} or payload["schema_version"] != 1 or not isinstance(payload["members"], list):
         raise RosterError("roster must contain only schema_version 1 and a members array")

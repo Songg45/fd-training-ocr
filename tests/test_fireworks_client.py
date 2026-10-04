@@ -9,7 +9,7 @@ from urllib.request import Request
 from fd_training_ocr.fireworks_client import (
     DuplicateSubmissionError, FireworksClient, FireworksConnectionError,
     FireworksSubmissionRejected, FireworksSubmissionUnknown, SubmissionLedger,
-    _NoRedirectHandler)
+    SubmissionCoordinator, _NoRedirectHandler)
 
 
 class FakeResponse:
@@ -299,6 +299,101 @@ class SubmissionLedgerTests(unittest.TestCase):
             ledger = SubmissionLedger(path)
             with self.assertRaises(ValueError):
                 ledger.assert_may_submit(self.record(), self.activity_payload())
+
+    def test_coordinator_reconciles_stale_record_from_terminal_ledger_state(self):
+        with TemporaryDirectory() as name:
+            ledger = SubmissionLedger(Path(name) / "submissions.jsonl")
+            coordinator = SubmissionCoordinator(ledger)
+            record = self.record()
+            payload = self.activity_payload()
+            reservation = coordinator.reserve(
+                record=record, payload=payload,
+                endpoint="https://webtrainingapi.eprsys.com/api/TrnCommon/addActivity")
+            ledger.append(
+                record=record, payload=payload, status="rejected",
+                attempt_id=reservation["attempt_id"], response_status=422,
+                error="invalid")
+            self.assertEqual(record["fireworks_submission"]["status"], "attempting")
+
+            changed, entry = coordinator.reconcile_record(record)
+            self.assertTrue(changed)
+            self.assertEqual(entry["status"], "rejected")
+            self.assertEqual(record["fireworks_submission"]["status"], "rejected")
+            ledger.assert_may_submit(record, payload)
+
+    def test_manual_not_submitted_reconciliation_releases_unknown_attempt(self):
+        with TemporaryDirectory() as name:
+            ledger = SubmissionLedger(Path(name) / "submissions.jsonl")
+            coordinator = SubmissionCoordinator(ledger)
+            record = self.record()
+            payload = self.activity_payload()
+            reservation = coordinator.reserve(
+                record=record, payload=payload,
+                endpoint="https://webtrainingapi.eprsys.com/api/TrnCommon/addActivity")
+            coordinator.finalize(
+                record=record, payload=payload, status="unknown",
+                attempt_id=reservation["attempt_id"],
+                endpoint=reservation["endpoint"], error="connection dropped")
+
+            entry = coordinator.manual_reconcile(
+                record=record, created=False,
+                recorded_at="2026-09-20T12:00:00+00:00")
+            self.assertEqual(entry["status"], "reconciled_not_submitted")
+            self.assertEqual(
+                entry["reconciliation"]["decision"], "confirmed_not_submitted")
+            self.assertEqual(
+                record["fireworks_submission"]["status"],
+                "reconciled_not_submitted")
+            ledger.assert_may_submit(record, payload)
+
+    def test_manual_submitted_reconciliation_remains_locked_with_activity_id(self):
+        with TemporaryDirectory() as name:
+            ledger = SubmissionLedger(Path(name) / "submissions.jsonl")
+            coordinator = SubmissionCoordinator(ledger)
+            record = self.record()
+            payload = self.activity_payload()
+            coordinator.reserve(
+                record=record, payload=payload,
+                endpoint="https://webtrainingapi.eprsys.com/api/TrnCommon/addActivity")
+
+            entry = coordinator.manual_reconcile(
+                record=record, created=True, activity_id=9876)
+            self.assertEqual(entry["status"], "submitted")
+            self.assertEqual(entry["activity_id"], 9876)
+            self.assertEqual(
+                entry["reconciliation"]["decision"], "confirmed_submitted")
+            with self.assertRaises(DuplicateSubmissionError):
+                ledger.assert_may_submit(record, payload)
+
+    def test_coordinator_reservation_exists_before_transport_is_called(self):
+        with TemporaryDirectory() as name:
+            ledger = SubmissionLedger(Path(name) / "submissions.jsonl")
+            coordinator = SubmissionCoordinator(ledger)
+            record = self.record()
+            payload = self.activity_payload()
+            observed = []
+
+            def transport(request, *, timeout):
+                entry = ledger.effective_entry(record, payload)
+                observed.append((entry["status"], request.get_method(), timeout))
+                return FakeResponse({"responseObj": {"moneln": 2468}, "rc": 0})
+
+            client = FireworksClient("secret-token", transport=transport)
+            client.connected = True
+            reservation = coordinator.reserve(
+                record=record, payload=payload, endpoint=client.activity_url)
+            response = client.post_activity(payload)
+            coordinator.finalize(
+                record=record, payload=payload, status="submitted",
+                attempt_id=reservation["attempt_id"],
+                endpoint=client.activity_url, response=response.payload,
+                response_status=response.status_code,
+                response_text=response.text,
+                response_body_sha256=response.body_sha256)
+
+            self.assertEqual(observed, [("attempting", "POST", 20.0)])
+            self.assertEqual(record["fireworks_submission"]["status"], "submitted")
+            self.assertEqual(record["fireworks_submission"]["activity_id"], 2468)
 
     @staticmethod
     def activity_payload():

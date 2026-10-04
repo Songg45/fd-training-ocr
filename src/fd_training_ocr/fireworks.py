@@ -10,6 +10,8 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
+from .strict_json import parse_json_object
+
 
 SELECTABLE_CATEGORY_NAMES = (
     "Company Training",
@@ -72,7 +74,9 @@ def _positive_integer(value: Any, field_name: str) -> int:
 def load_fireworks_mappings(path: Path) -> FireworksMappings:
     """Load department-specific Fireworks IDs from an external JSON file."""
     source = path.expanduser().resolve()
-    payload = json.loads(source.read_text(encoding="utf-8"))
+    payload = parse_json_object(
+        source.read_text(encoding="utf-8"),
+        object_name="Fireworks mapping file")
     if not isinstance(payload, Mapping) or payload.get("schema_version") != 1:
         raise ValueError("unsupported Fireworks mapping file")
 
@@ -260,27 +264,9 @@ def fireworks_staff_ids(record: Mapping[str, Any], roster: Any) -> tuple[tuple[i
     return tuple(resolved), tuple(unresolved)
 
 
-def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError(f"duplicate JSON key: {key}")
-        result[key] = value
-    return result
-
-
-def _reject_non_finite_json_number(value: str) -> None:
-    raise ValueError(f"non-finite JSON number is not allowed: {value}")
-
-
 def parse_fireworks_request(text: str) -> dict[str, Any]:
     """Parse one exact request object without lossy or ambiguous JSON values."""
-    payload = json.loads(
-        text, object_pairs_hook=_reject_duplicate_json_keys,
-        parse_constant=_reject_non_finite_json_number)
-    if not isinstance(payload, dict):
-        raise ValueError("Formatted Request must be a JSON object")
-    return payload
+    return parse_json_object(text, object_name="Formatted Request")
 
 
 def save_fireworks_request_edit(record: dict[str, Any], text: str,
