@@ -160,6 +160,43 @@ class FireworksRequestTests(unittest.TestCase):
         self.assertIn("locationstr does not match location", errors)
         self.assertTrue(any("Instructor: Unknown" in error for error in errors))
 
+    def test_submission_validation_rejects_total_hours_that_disagree_with_interval(self):
+        mappings = self.mappings()
+        record = {"fields": {
+            "date": {"reviewed_value": "09/19/26"},
+            "start_time": {"reviewed_value": "16:00"},
+            "end_time": {"reviewed_value": "17:00"},
+            "total_hours": {"reviewed_value": "8"},
+            "description": {"reviewed_value": "Reviewed training"},
+        }}
+        payload = formatted_fireworks_request(
+            record, (20,), category=mappings.category_named("Company Training"),
+            location=mappings.location_named("Fire Station"), station_id=54)
+
+        errors = validate_fireworks_payload(
+            payload, mappings, expected_staff_ids=(20,))
+
+        self.assertTrue(any(
+            "totalHours must match the startDt/endDt duration" in error
+            for error in errors))
+
+    def test_submission_validation_accepts_matching_overnight_duration(self):
+        mappings = self.mappings()
+        record = {"fields": {
+            "date": {"reviewed_value": "09/19/26"},
+            "start_time": {"reviewed_value": "23:00"},
+            "end_time": {"reviewed_value": "01:30"},
+            "total_hours": {"reviewed_value": "2.5"},
+            "description": {"reviewed_value": "Overnight training"},
+        }}
+        payload = formatted_fireworks_request(
+            record, (20,), category=mappings.category_named("Company Training"),
+            location=mappings.location_named("Fire Station"), station_id=54)
+
+        self.assertEqual(
+            validate_fireworks_payload(
+                payload, mappings, expected_staff_ids=(20,)), ())
+
     def test_submission_validation_requires_exact_reviewed_staff_ids(self):
         mappings = self.mappings()
         record = {"fields": {

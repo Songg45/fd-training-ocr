@@ -499,12 +499,25 @@ def validate_fireworks_payload(
         errors.append(
             f"station must be {mappings.station_id} ({mappings.station_name})")
 
+    total_hours: Decimal | None = None
     try:
         total_hours = Decimal(str(payload.get("totalHours")))
         if not total_hours.is_finite() or total_hours <= 0:
             raise InvalidOperation
     except (InvalidOperation, TypeError, ValueError):
+        total_hours = None
         errors.append("totalHours must be a positive number")
+    if (total_hours is not None and start is not None and end is not None
+            and end > start):
+        duration_hours = Decimal(str((end - start).total_seconds())) / Decimal(3600)
+        one_minute = Decimal(1) / Decimal(60)
+        if abs(total_hours - duration_hours) > one_minute:
+            received = format(total_hours.normalize(), "f")
+            calculated = format(
+                duration_hours.quantize(Decimal("0.01")).normalize(), "f")
+            errors.append(
+                "totalHours must match the startDt/endDt duration "
+                f"(received {received}; calculated {calculated})")
 
     staff = payload.get("staff")
     if not isinstance(staff, list) or not staff:
