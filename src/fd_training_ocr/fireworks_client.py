@@ -26,6 +26,7 @@ LEDGER_STATUSES = frozenset({
     "reconciled_not_submitted",
 })
 LOCKED_SUBMISSION_STATUSES = frozenset({"attempting", "submitted", "unknown"})
+ACTIVITY_CREATED_DESCRIPTIONS = frozenset({"new activity added"})
 
 
 class FireworksError(RuntimeError):
@@ -117,6 +118,15 @@ def _response_error_kwargs(response: FireworksApiResponse) -> dict[str, Any]:
         "response_text": response.text,
         "response_body_sha256": response.body_sha256,
     }
+
+
+def _response_affirms_activity_created(payload: Mapping[str, Any]) -> bool:
+    """Recognize only explicit, observed success messages from addActivity."""
+    description = payload.get("description")
+    if not isinstance(description, str):
+        return False
+    normalized = " ".join(description.split()).casefold().rstrip(".!")
+    return normalized in ACTIVITY_CREATED_DESCRIPTIONS
 
 
 class FireworksClient:
@@ -264,6 +274,8 @@ class FireworksClient:
             raise FireworksSubmissionUnknown(
                 f"Fireworks returned HTTP {result.status_code}; verify before retrying",
                 **_response_error_kwargs(result))
+        if _response_affirms_activity_created(result.payload):
+            return result
         rc = result.payload.get("rc")
         if type(rc) is int and rc != 0:
             raise FireworksSubmissionRejected(
@@ -510,6 +522,26 @@ class SubmissionCoordinator:
         entry = self.ledger.effective_entry(record)
         if entry is None:
             return False, None
+        response = entry.get("response")
+        payload = entry.get("payload")
+        if (entry.get("status") == "rejected"
+                and isinstance(response, Mapping)
+                and isinstance(payload, Mapping)
+                and _response_affirms_activity_created(response)):
+            entry = self.ledger.append(
+                record=record, payload=payload, status="submitted",
+                attempt_id=(str(entry.get("attempt_id") or "").strip() or None),
+                endpoint=str(entry.get("endpoint") or FIREWORKS_API_BASE),
+                response=response,
+                response_status=entry.get("response_status"),
+                response_text=entry.get("response_text"),
+                response_body_sha256=entry.get("response_body_sha256"),
+                reconciliation={
+                    "decision": "explicit_success_response_reclassified",
+                    "prior_status": "rejected",
+                    "review_method": (
+                        "automatic repair for the observed addActivity success message"),
+                })
         state = self._record_state(entry)
         changed = record.get("fireworks_submission") != state
         if changed:

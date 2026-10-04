@@ -140,6 +140,19 @@ class FireworksClientTests(unittest.TestCase):
         with self.assertRaises(FireworksSubmissionRejected):
             client.post_activity({"assignTitle": "Rejected"})
 
+    def test_observed_success_description_overrides_nonzero_rc_without_activity_id(self):
+        api_payload = {
+            "rc": 1,
+            "description": "  New   activity added!  ",
+            "responseObj": None,
+        }
+        client = self.connected_client(
+            RecordingTransport(FakeResponse(api_payload)))
+
+        response = client.post_activity({"assignTitle": "Accepted"})
+
+        self.assertEqual(response.payload, api_payload)
+
     def test_api_base_is_pinned_to_the_production_https_origin(self):
         invalid = (
             "http://webtrainingapi.eprsys.com/api",
@@ -320,6 +333,35 @@ class SubmissionLedgerTests(unittest.TestCase):
             self.assertEqual(entry["status"], "rejected")
             self.assertEqual(record["fireworks_submission"]["status"], "rejected")
             ledger.assert_may_submit(record, payload)
+
+    def test_coordinator_repairs_explicit_success_that_was_recorded_as_rejected(self):
+        with TemporaryDirectory() as name:
+            ledger = SubmissionLedger(Path(name) / "submissions.jsonl")
+            coordinator = SubmissionCoordinator(ledger)
+            record = self.record()
+            payload = self.activity_payload()
+            success = {
+                "rc": 1,
+                "description": "new activity added",
+                "responseObj": None,
+            }
+            ledger.append(
+                record=record, payload=payload, status="rejected",
+                attempt_id="attempt-1", response=success,
+                response_status=200,
+                response_text=json.dumps(success),
+                error="new activity added")
+
+            changed, entry = coordinator.reconcile_record(record)
+
+            self.assertTrue(changed)
+            self.assertEqual(entry["status"], "submitted")
+            self.assertIsNone(entry["activity_id"])
+            self.assertEqual(
+                entry["reconciliation"]["decision"],
+                "explicit_success_response_reclassified")
+            with self.assertRaises(DuplicateSubmissionError):
+                ledger.assert_may_submit(record, payload)
 
     def test_manual_not_submitted_reconciliation_releases_unknown_attempt(self):
         with TemporaryDirectory() as name:

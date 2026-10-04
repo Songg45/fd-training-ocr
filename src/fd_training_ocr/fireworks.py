@@ -322,6 +322,7 @@ def formatted_fireworks_request(
         total_hours = record.get("event", {}).get("total_hours_calculated")
     start_dt, end_dt = _fireworks_datetimes(
         date_value, _field_value(record, "start_time"), _field_value(record, "end_time"))
+    staff = list(staff_ids)
 
     location_fields = {
         "moneln": None if location is None else location.id,
@@ -381,7 +382,7 @@ def formatted_fireworks_request(
         "station": station_id,
         "Shift": None,
         "AppID": None,
-        "attendance": None,
+        "attendance": len(staff),
         "online": 0,
         "isAllDay": 0,
         "expiredReq": 0,
@@ -413,7 +414,7 @@ def formatted_fireworks_request(
         "everyX": None,
         "certRepCode": 0,
         "blockAfterEndDt": 0,
-        "staff": list(staff_ids),
+        "staff": staff,
         "volunteer": [],
         "staffing": [],
         "removeVolunteer": [],
@@ -534,6 +535,13 @@ def validate_fireworks_payload(
             errors.append(f"staff is missing reviewed Staff ID {staff_id}")
         for staff_id in sorted(actual - expected):
             errors.append(f"staff contains unexpected Staff ID {staff_id}")
+
+    attendance = payload.get("attendance")
+    if type(attendance) is not int or attendance < 0:
+        errors.append("attendance must be a non-negative integer")
+    elif isinstance(staff, list) and attendance != len(staff):
+        errors.append(
+            f"attendance must equal the number of staff IDs ({len(staff)})")
 
     if unresolved_staff:
         errors.append("unresolved Fireworks Staff ID: " + ", ".join(unresolved_staff))

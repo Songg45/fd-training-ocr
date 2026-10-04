@@ -52,6 +52,7 @@ class FireworksRequestTests(unittest.TestCase):
         self.assertEqual(payload["endDt"], "2026-09-19T22:00:00.000Z")
         self.assertEqual(payload["totalHours"], "4")
         self.assertEqual(payload["staff"], [20, 21])
+        self.assertEqual(payload["attendance"], 2)
         self.assertEqual(payload["assignCat"], 101)
         self.assertEqual(payload["location"], 201)
         self.assertEqual(payload["station"], 54)
@@ -219,6 +220,26 @@ class FireworksRequestTests(unittest.TestCase):
             payload, mappings, expected_staff_ids=(20, 26))
         self.assertTrue(any("missing reviewed Staff ID 26" in error for error in errors))
         self.assertTrue(any("unexpected Staff ID 999999" in error for error in errors))
+
+    def test_submission_validation_requires_attendance_to_match_staff_count(self):
+        mappings = self.mappings()
+        record = {"fields": {
+            "date": {"reviewed_value": "09/19/26"},
+            "start_time": {"reviewed_value": "18:00"},
+            "end_time": {"reviewed_value": "19:00"},
+            "total_hours": {"reviewed_value": "1"},
+            "description": {"reviewed_value": "Reviewed training"},
+        }}
+        payload = formatted_fireworks_request(
+            record, (20, 26),
+            category=mappings.category_named("Company Training"),
+            location=mappings.location_named("Fire Station"), station_id=54)
+        payload["attendance"] = 1
+
+        errors = validate_fireworks_payload(
+            payload, mappings, expected_staff_ids=(20, 26))
+
+        self.assertIn("attendance must equal the number of staff IDs (2)", errors)
 
     def test_external_mapping_file_is_strict_and_selects_only_submission_categories(self):
         with TemporaryDirectory() as name:
