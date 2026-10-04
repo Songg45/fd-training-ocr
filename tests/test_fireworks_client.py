@@ -7,6 +7,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request
 
 from fd_training_ocr.fireworks_client import (
+    activity_id_from_response,
     DuplicateSubmissionError, FireworksClient, FireworksConnectionError,
     FireworksSubmissionRejected, FireworksSubmissionUnknown, SubmissionLedger,
     SubmissionCoordinator, _NoRedirectHandler)
@@ -152,6 +153,21 @@ class FireworksClientTests(unittest.TestCase):
         response = client.post_activity({"assignTitle": "Accepted"})
 
         self.assertEqual(response.payload, api_payload)
+
+    def test_observed_assignment_success_returns_top_level_activity_id(self):
+        api_payload = {
+            "id": 94,
+            "wishObject": {},
+            "rc": 1,
+            "description": "new assignment added",
+        }
+        client = self.connected_client(
+            RecordingTransport(FakeResponse(api_payload)))
+
+        response = client.post_activity({"assignTitle": "Accepted"})
+
+        self.assertEqual(response.payload, api_payload)
+        self.assertEqual(activity_id_from_response(response.payload), 94)
 
     def test_api_base_is_pinned_to_the_production_https_origin(self):
         invalid = (
@@ -360,6 +376,35 @@ class SubmissionLedgerTests(unittest.TestCase):
             self.assertEqual(
                 entry["reconciliation"]["decision"],
                 "explicit_success_response_reclassified")
+            with self.assertRaises(DuplicateSubmissionError):
+                ledger.assert_may_submit(record, payload)
+
+    def test_coordinator_repairs_observed_assignment_success_with_id(self):
+        with TemporaryDirectory() as name:
+            ledger = SubmissionLedger(Path(name) / "submissions.jsonl")
+            coordinator = SubmissionCoordinator(ledger)
+            record = self.record()
+            payload = self.activity_payload()
+            success = {
+                "id": 94,
+                "wishObject": {},
+                "rc": 1,
+                "description": "new assignment added",
+            }
+            ledger.append(
+                record=record, payload=payload, status="rejected",
+                attempt_id="attempt-94", response=success,
+                response_status=200,
+                response_text=json.dumps(success),
+                error="new assignment added")
+
+            changed, entry = coordinator.reconcile_record(record)
+
+            self.assertTrue(changed)
+            self.assertEqual(entry["status"], "submitted")
+            self.assertEqual(entry["activity_id"], 94)
+            self.assertEqual(
+                record["fireworks_submission"]["activity_id"], 94)
             with self.assertRaises(DuplicateSubmissionError):
                 ledger.assert_may_submit(record, payload)
 

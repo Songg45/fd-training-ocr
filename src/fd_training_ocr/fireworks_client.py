@@ -27,6 +27,7 @@ LEDGER_STATUSES = frozenset({
 })
 LOCKED_SUBMISSION_STATUSES = frozenset({"attempting", "submitted", "unknown"})
 ACTIVITY_CREATED_DESCRIPTIONS = frozenset({"new activity added"})
+ASSIGNMENT_CREATED_DESCRIPTION = "new assignment added"
 
 
 class FireworksError(RuntimeError):
@@ -126,7 +127,10 @@ def _response_affirms_activity_created(payload: Mapping[str, Any]) -> bool:
     if not isinstance(description, str):
         return False
     normalized = " ".join(description.split()).casefold().rstrip(".!")
-    return normalized in ACTIVITY_CREATED_DESCRIPTIONS
+    if normalized in ACTIVITY_CREATED_DESCRIPTIONS:
+        return True
+    return (normalized == ASSIGNMENT_CREATED_DESCRIPTION
+            and activity_id_from_response(payload) is not None)
 
 
 class FireworksClient:
@@ -294,7 +298,7 @@ class FireworksClient:
 
 def activity_id_from_response(payload: Mapping[str, Any]) -> int | None:
     """Extract a likely created-activity identifier without mistaking staff arrays."""
-    for key in ("moneln", "activityId", "activityID"):
+    for key in ("id", "moneln", "activityId", "activityID"):
         value = payload.get(key)
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             return value
