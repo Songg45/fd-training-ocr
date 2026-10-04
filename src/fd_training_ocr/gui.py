@@ -83,6 +83,26 @@ def fireworks_response_popup_text(
         f"{body}")
 
 
+def record_banner_state(record: dict) -> tuple[str, str]:
+    """Return the persistent top-banner text and color for one record."""
+    submission = record.get("fireworks_submission", {})
+    if (isinstance(submission, dict)
+            and submission.get("status") == "submitted"):
+        activity_id = submission.get("activity_id")
+        activity_suffix = (
+            f" — Activity ID: {activity_id}"
+            if activity_id not in (None, "") else "")
+        return "Submitted to Fireworks" + activity_suffix, "#286428"
+    if record.get("status") == "review_required":
+        warning_text = "; ".join(record.get("warnings", ()))
+        return (
+            "REVIEW REQUIRED — "
+            + (warning_text or "one or more fields require review"),
+            "#8b1e1e",
+        )
+    return "", ""
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="fd-training-ocr-gui")
     parser.add_argument("--config", type=Path)
@@ -257,6 +277,7 @@ def main(argv=None) -> int:
                            self.accept_stage3_button,
                            self.progress, self.status): controls.addWidget(widget)
             self.warning = QtWidgets.QLabel("")
+            self.warning.setAccessibleName("Record status")
             self.warning.setStyleSheet("background:#8b1e1e;color:white;font-weight:bold;padding:8px;")
             self.warning.hide(); layout.addWidget(self.warning)
             splitter = QtWidgets.QSplitter(); layout.addWidget(splitter, 1)
@@ -685,11 +706,11 @@ def main(argv=None) -> int:
                 self.sync_fireworks_controls({})
                 failure = self.failures.get(self.source)
                 if failure:
-                    self.warning.setText(f"PROCESSING FAILED — {failure}")
-                    self.warning.show()
+                    self.set_record_banner(
+                        f"PROCESSING FAILED — {failure}", "#8b1e1e")
                     self.status.setText("Processing failed — retry with Process or Process All")
                 else:
-                    self.warning.hide()
+                    self.set_record_banner("")
                     self.status.setText(self.source.name)
             else:
                 self.display_record(self.record)
@@ -1028,6 +1049,12 @@ def main(argv=None) -> int:
             self.formatted_request_warning.setStyleSheet(
                 f"background:{color};color:white;font-weight:bold;padding:6px;")
             self.formatted_request_warning.setVisible(bool(message))
+
+        def set_record_banner(self, message, color="#8b1e1e"):
+            self.warning.setText(message)
+            self.warning.setStyleSheet(
+                f"background:{color};color:white;font-weight:bold;padding:8px;")
+            self.warning.setVisible(bool(message))
 
         def sync_fireworks_controls(self, payload):
             category_name = None
@@ -1659,9 +1686,14 @@ def main(argv=None) -> int:
             else:
                 self.set_formatted_request_message("")
             self.build_record_form(structured_rows(record))
-            needs_review = record.get("status") == "review_required"
-            self.warning.setText("REVIEW REQUIRED — " + ("; ".join(record.get("warnings", ())) or "one or more fields require review"))
-            self.warning.setVisible(needs_review); self.status.setText("Complete — review required" if needs_review else "Complete")
+            banner_text, banner_color = record_banner_state(record)
+            self.set_record_banner(banner_text, banner_color or "#8b1e1e")
+            if submission_status == "submitted":
+                self.status.setText("Complete — submitted")
+            elif record.get("status") == "review_required":
+                self.status.setText("Complete — review required")
+            else:
+                self.status.setText("Complete")
             self.update_selection_buttons()
             self.update_fireworks_buttons()
 

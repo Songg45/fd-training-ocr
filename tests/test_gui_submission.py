@@ -2,6 +2,7 @@ from concurrent.futures import Future
 import unittest
 
 from fd_training_ocr.gui import (fireworks_response_popup_text,
+                                 record_banner_state,
                                  submission_close_action)
 
 
@@ -41,6 +42,45 @@ class FireworksResponsePopupTests(unittest.TestCase):
 
         self.assertIn('"rc": 1', text)
         self.assertIn('"description": "invalid"', text)
+
+
+class RecordBannerTests(unittest.TestCase):
+    def test_submitted_record_uses_green_banner_even_if_review_warnings_remain(self):
+        record = {
+            "status": "review_required",
+            "warnings": ["one or more fields require review"],
+            "fireworks_submission": {"status": "submitted", "activity_id": 94},
+        }
+
+        self.assertEqual(
+            record_banner_state(record),
+            ("Submitted to Fireworks — Activity ID: 94", "#286428"),
+        )
+
+    def test_submitted_record_without_activity_id_still_has_green_banner(self):
+        record = {"fireworks_submission": {"status": "submitted"}}
+
+        self.assertEqual(
+            record_banner_state(record),
+            ("Submitted to Fireworks", "#286428"),
+        )
+
+    def test_unsubmitted_review_record_keeps_red_banner(self):
+        record = {
+            "status": "review_required",
+            "warnings": ["date requires review", "instructor requires review"],
+        }
+
+        self.assertEqual(
+            record_banner_state(record),
+            (
+                "REVIEW REQUIRED — date requires review; instructor requires review",
+                "#8b1e1e",
+            ),
+        )
+
+    def test_completed_unsubmitted_record_has_no_banner(self):
+        self.assertEqual(record_banner_state({"status": "complete"}), ("", ""))
 
 
 if __name__ == "__main__":
