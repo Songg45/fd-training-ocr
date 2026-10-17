@@ -1,6 +1,7 @@
 """Exercise the real Status dialog without OCR, credentials, or live API calls."""
 
 import ast
+from concurrent.futures import Future
 import hashlib
 import gc
 from datetime import datetime
@@ -95,6 +96,9 @@ class StatusDialogTests(unittest.TestCase):
 
             def save_formatted_request(self):
                 return True
+
+            def update_navigation(self):
+                pass
 
             def prepare_second_record(self):
                 self.source = self.sources[1]
@@ -307,23 +311,68 @@ class StatusDialogTests(unittest.TestCase):
                 host.ledger.assert_may_submit(host.record, {})
             host.close()
 
+    @staticmethod
+    def full_window(root):
+        namespace = dict(vars(gui))
+        ledger = SubmissionLedger(root / "submissions.jsonl")
+        namespace.update(
+            QtCore=QtCore, QtGui=QtGui, QtWidgets=QtWidgets,
+            args=SimpleNamespace(state_file=root / "state.json", export_dir=root / "exports",
+                                 queues_dir=root / "queues"),
+            config=AppConfig(), fireworks_mappings=None,
+            fireworks_ledger=ledger, fireworks_submissions=SubmissionCoordinator(ledger))
+        tree = ast.parse(Path(gui.__file__).read_text(encoding="utf-8"))
+        main = next(node for node in tree.body
+                    if isinstance(node, ast.FunctionDef) and node.name == "main")
+        classes = [node for node in main.body if isinstance(node, ast.ClassDef)]
+        exec(compile(ast.Module(body=classes, type_ignores=[]), gui.__file__, "exec"), namespace)
+        return namespace["Window"](), ledger
+
+    def test_process_all_excludes_reviewed_pdfs_and_selected_remains_an_override(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            window, _ledger = self.full_window(root)
+            first, second, third = (root / f"form-{number}.pdf" for number in range(3))
+            for source in (first, second, third):
+                source.write_bytes(f"%PDF {source.name}".encode())
+            window.sources, window.current_index, window.source = [first, second, third], 0, first
+            window.records[third] = {"source_sha256": "c" * 64, "page": 1}
+            window.human_reviews = {first: True, second: True}
+            window.update_navigation()
+            self.assertFalse(window.process_all_button.isEnabled())
+            self.assertTrue(window.process_button.isEnabled())
+            with patch.object(window, "process_next_batch_item") as next_item:
+                window.process_all()
+                next_item.assert_not_called()
+            self.assertIn("Human Review=True", window.status.text())
+
+            def allow_second(_dialog, table):
+                self.review_cell(table, 2)[1].setCurrentIndex(1)
+                self.assertTrue(window.process_all_button.isEnabled())
+
+            self.use_dialog(window, allow_second)
+            with patch.object(window, "process_next_batch_item") as next_item:
+                window.process_all()
+                next_item.assert_called_once()
+                self.assertEqual(window.batch_queue, [second])
+                self.assertEqual(window.batch_total, 1)
+            window.batch_queue, window.batch_total = [], 0
+            window.set_busy(False)
+            # Process Selected deliberately ignores Human Review=True.
+            with patch.object(window.executor, "submit", return_value=Future()) as submit:
+                window.process()
+                submit.assert_called_once()
+                self.assertEqual(window.processing_source, first)
+                self.assertIs(window.human_reviews[first], True)
+            window.poll_timer.stop()
+            window.future = None
+            window.set_busy(False)
+            window.close()
+
     def test_full_window_button_preserves_pending_draft_and_shows_both_green_banners(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
-            namespace = dict(vars(gui))
-            ledger = SubmissionLedger(root / "submissions.jsonl")
-            namespace.update(
-                QtCore=QtCore, QtGui=QtGui, QtWidgets=QtWidgets,
-                args=SimpleNamespace(state_file=root / "state.json", export_dir=root / "exports",
-                                     queues_dir=root / "queues"),
-                config=AppConfig(), fireworks_mappings=None,
-                fireworks_ledger=ledger, fireworks_submissions=SubmissionCoordinator(ledger))
-            tree = ast.parse(Path(gui.__file__).read_text(encoding="utf-8"))
-            main = next(node for node in tree.body
-                        if isinstance(node, ast.FunctionDef) and node.name == "main")
-            classes = [node for node in main.body if isinstance(node, ast.ClassDef)]
-            exec(compile(ast.Module(body=classes, type_ignores=[]), gui.__file__, "exec"), namespace)
-            window = namespace["Window"]()
+            window, ledger = self.full_window(root)
             source = root / "form.pdf"
             source.write_bytes(b"%PDF synthetic form")
             window.sources, window.current_index, window.source = [source], 0, source

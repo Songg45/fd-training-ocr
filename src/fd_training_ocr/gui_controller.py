@@ -91,9 +91,12 @@ def queue_index_for_page(page_number: int, queue_count: int) -> int:
 
 
 def unprocessed_sources(sources: list[Path] | tuple[Path, ...],
-                        records: Mapping[Path, Any]) -> tuple[Path, ...]:
-    """Return queued PDFs that do not yet have a completed in-memory result."""
-    return tuple(source for source in sources if source not in records)
+                        records: Mapping[Path, Any],
+                        human_reviews: Mapping[Path, bool] | None = None) -> tuple[Path, ...]:
+    """Return queued PDFs needing batch OCR, excluding completed human reviews."""
+    reviews = human_reviews or {}
+    return tuple(source for source in sources
+                 if source not in records and reviews.get(source) is not True)
 
 
 @dataclass(frozen=True)

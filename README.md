@@ -147,8 +147,13 @@ Use its dropdown to choose `True` or `False`; your selection saves immediately a
 precedence over that default, including an explicit `False` on a submitted PDF. The choice
 is a local tracking flag, not a change to submission status, the green banner, or the
 Fireworks request. It stays with the PDF when sorting or renumbering and survives restarts
-and named-queue switches. Unprocessed PDFs can be marked without making them count as
-OCR-processed. Replacing a PDF clears the old PDF's Human Review choice for that slot.
+and named-queue switches. **Process All** skips PDFs marked Human Review `True`, including
+PDFs that have never been OCR-processed. As before, it also skips every PDF with an existing
+OCR result. Only unprocessed PDFs with Human Review blank or `False` enter the batch.
+Setting Human Review to `False` does not force an existing OCR result to be reprocessed;
+use **Process Selected** for an intentional re-run, including a Human Review `True` PDF.
+Review selections do not create fake OCR results. Replacing a PDF clears the old PDF's
+Human Review choice for that slot.
 
 If a training record is already in Fireworks but the program has no receipt for it, select
 its processed PDF in **Process > Status** and click **Mark Already Submitted…**. The same

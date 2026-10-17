@@ -872,6 +872,7 @@ def main(argv=None) -> int:
                 # Keep the sort item and dropdown bound to the same PDF after sorting.
                 item.sort_key = (int(value), item.data(QtCore.Qt.ItemDataRole.UserRole))
                 item.setText("True" if value else "False")
+                self.update_navigation()
                 if table.isSortingEnabled():
                     header = table.horizontalHeader()
                     table.sortItems(header.sortIndicatorSection(), header.sortIndicatorOrder())
@@ -931,6 +932,7 @@ def main(argv=None) -> int:
                 "green Submitted to Fireworks banner. "
                 "Human Review defaults to True for submitted PDFs and blank otherwise; "
                 "choose True or False to save your own review status. "
+                "Human Review True is skipped by Process All. "
                 "This does not change submission status.")
             explanation.setWordWrap(True)
             layout.addWidget(explanation)
@@ -1239,7 +1241,7 @@ def main(argv=None) -> int:
             self.new_queue_button.setEnabled(idle)
             self.process_button.setEnabled(idle and self.source is not None)
             self.process_all_button.setEnabled(
-                idle and bool(unprocessed_sources(self.sources, self.records)))
+                idle and bool(unprocessed_sources(self.sources, self.records, self.human_reviews)))
             self.process_status_button.setEnabled(idle)
             self.stop_button.setEnabled(
                 self.busy and self.batch_total > 0 and not self.stop_requested)
@@ -1452,9 +1454,10 @@ def main(argv=None) -> int:
             self.poll_timer.start()
 
         def process_all(self):
-            pending = list(unprocessed_sources(self.sources, self.records))
+            pending = list(unprocessed_sources(self.sources, self.records, self.human_reviews))
             if not pending:
-                self.status.setText("All queued PDFs are already processed")
+                self.status.setText(
+                    "No PDFs need batch OCR — all are already processed or marked Human Review=True")
                 return
             self.batch_queue = pending
             self.batch_total = len(pending)

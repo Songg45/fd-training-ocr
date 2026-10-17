@@ -220,6 +220,16 @@ class GuiControllerTests(unittest.TestCase):
         self.assertEqual(unprocessed_sources([first, second, third], {second: {}}),
                          (first, third))
 
+    def test_batch_selection_excludes_human_review_true_and_keeps_blank_or_false(self):
+        sources = [Path(f"{number}.pdf") for number in range(5)]
+        records = {sources[1]: {}}
+        reviews = {sources[0]: True, sources[1]: False, sources[2]: False, sources[4]: True}
+        self.assertEqual(unprocessed_sources(sources, records, reviews),
+                         (sources[2], sources[3]))
+        self.assertEqual(records, {sources[1]: {}})
+        self.assertEqual(unprocessed_sources(sources, {}, {source: True for source in sources}), ())
+        self.assertEqual(unprocessed_sources([], records, reviews), ())
+
     def test_display_value_uses_review_resolution_order(self):
         self.assertEqual(display_value({"raw":"a", "normalized":"b", "resolved_value":"c", "reviewed_value":"d"}), "d")
         self.assertEqual(display_value({"raw":"a", "normalized":"b", "resolved_value":None}), "b")
@@ -637,6 +647,8 @@ class GuiControllerTests(unittest.TestCase):
             self.assertEqual(load_human_reviews(queue, [first, second]), expected)
             sources, _, records, _ = load_gui_state(queue)
             self.assertEqual(unprocessed_sources(sources, records), (second,))
+            self.assertEqual(unprocessed_sources(
+                sources, records, load_human_reviews(queue, sources)), ())
             original = queue.read_bytes()
             save_queue_session(state, [other], 0, {}, {}, saved_queue=next_queue,
                                human_reviews={other: False})
