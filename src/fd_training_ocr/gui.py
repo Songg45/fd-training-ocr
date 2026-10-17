@@ -31,8 +31,9 @@ from .gui_controller import (EVENT_SELECTIONS, GuiPaths, accept_stage3_suggestio
                              stage3_suggestion, unprocessed_sources,
                              validate_pdfs, alignment_fallback_record)
 from .pdf_render import render_pdf
-from .fireworks import (backfill_reviewed_instructors,
+from .fireworks import (approve_duration_override, backfill_reviewed_instructors,
                         displayed_fireworks_request, formatted_fireworks_request,
+                        duration_override_matches, fireworks_duration_mismatch,
                         fireworks_instructor_ids, fireworks_staff_ids,
                         load_fireworks_mappings,
                         parse_fireworks_request,
@@ -394,6 +395,18 @@ def main(argv=None) -> int:
             fireworks_fields.addWidget(self.fireworks_location, 1, 1)
             fireworks_fields.addWidget(QtWidgets.QLabel("Station"), 2, 0)
             fireworks_fields.addWidget(self.fireworks_station, 2, 1)
+            self.duration_override = QtWidgets.QCheckBox(
+                "Override total-hours mismatch for this record")
+            self.duration_override.setAccessibleName("Override total-hours mismatch")
+            self.duration_override.setToolTip(
+                "Use the reviewed credit hours even when the date/time span is longer or shorter")
+            self.duration_override_note = QtWidgets.QLabel("")
+            self.duration_override_note.setWordWrap(True)
+            self.duration_override_note.setStyleSheet(
+                "color:#cf9600;font-weight:bold;")
+            self.duration_override_note.hide()
+            fireworks_fields.addWidget(self.duration_override, 3, 0, 1, 2)
+            fireworks_fields.addWidget(self.duration_override_note, 4, 0, 1, 2)
             self.formatted_request_warning = QtWidgets.QLabel("")
             self.formatted_request_warning.setWordWrap(True)
             self.formatted_request_warning.setStyleSheet(
@@ -434,6 +447,7 @@ def main(argv=None) -> int:
             tabs.addTab(formatted_widget, "Formatted Request")
             self.setting_formatted_request = False
             self.setting_fireworks_controls = False
+            self.setting_duration_override = False
             self.fireworks_control_values = (None, None)
             self.formatted_request_dirty = False
             self.formatted_request_timer = QtCore.QTimer(self)
@@ -449,6 +463,7 @@ def main(argv=None) -> int:
                 self.fireworks_selector_changed)
             self.fireworks_location.currentIndexChanged.connect(
                 self.fireworks_selector_changed)
+            self.duration_override.toggled.connect(self.duration_override_changed)
             self.connect_fireworks_button.clicked.connect(self.connect_to_fireworks)
             self.submit_fireworks_button.clicked.connect(self.submit_to_fireworks)
             self.reconcile_fireworks_button.clicked.connect(
@@ -1441,6 +1456,52 @@ def main(argv=None) -> int:
                 max(0, self.fireworks_location.findData(location_name)))
             self.setting_fireworks_controls = False
             self.fireworks_control_values = (category_name, location_name)
+            self.sync_duration_override(payload)
+
+        def sync_duration_override(self, payload):
+            mismatch = fireworks_duration_mismatch(payload)
+            active = duration_override_matches(self.record or {}, payload)
+            self.setting_duration_override = True
+            self.duration_override.setChecked(active)
+            self.setting_duration_override = False
+            if mismatch is not None:
+                credited, elapsed = mismatch
+                self.duration_override_note.setText(
+                    f"Credit hours: {credited} | Date/time span: {elapsed} hours"
+                    + (" | OVERRIDE ACTIVE" if active else ""))
+            else:
+                self.duration_override_note.clear()
+            self.duration_override_note.setVisible(mismatch is not None)
+
+        def duration_override_changed(self, checked):
+            if (self.setting_duration_override or self.record is None
+                    or self.busy or self.fireworks_future is not None):
+                return
+            submission = self.record.get("fireworks_submission", {})
+            if isinstance(submission, dict) and submission.get("status") in LOCKED_SUBMISSION_STATUSES:
+                return
+            previous = self.record.get("fireworks_duration_override")
+            payload = {}
+            try:
+                if not self.save_formatted_request():
+                    raise ValueError("Correct the visible request JSON before overriding hours")
+                payload = self.visible_fireworks_payload()
+                if checked:
+                    approve_duration_override(
+                        self.record, payload, datetime.now(timezone.utc).isoformat())
+                else:
+                    self.record.pop("fireworks_duration_override", None)
+                automatic_export(self.record, args.export_dir)
+                self.persist_state(raise_errors=True)
+                self.display_record(self.record)
+            except (OSError, ValueError) as exc:
+                if previous is None:
+                    self.record.pop("fireworks_duration_override", None)
+                else:
+                    self.record["fireworks_duration_override"] = previous
+                self.sync_duration_override(payload)
+                QtWidgets.QMessageBox.critical(
+                    self, "Unable to save hours override", str(exc))
 
         def restore_fireworks_controls(self):
             category_name, location_name = self.fireworks_control_values
@@ -1538,6 +1599,12 @@ def main(argv=None) -> int:
                 idle and self.record is not None and not locked)
             self.formatted_request.setReadOnly(
                 self.record is None or locked or active)
+            try:
+                mismatch = fireworks_duration_mismatch(self.visible_fireworks_payload())
+            except ValueError:
+                mismatch = None
+            self.duration_override.setEnabled(
+                idle and self.record is not None and not locked and mismatch is not None)
 
         def connect_to_fireworks(self):
             if self.fireworks_future is not None:
@@ -1627,7 +1694,8 @@ def main(argv=None) -> int:
                 expected_staff_ids=tuple(generated.get("staff", ())),
                 unresolved_instructors=unresolved_instructors,
                 expected_instructor_ids=tuple(
-                    generated.get("instructors", ())))
+                    generated.get("instructors", ())),
+                allow_duration_mismatch=duration_override_matches(self.record or {}, payload))
 
         def submit_to_fireworks(self):
             if (self.record is None or fireworks_mappings is None
@@ -1661,6 +1729,13 @@ def main(argv=None) -> int:
                     "and are not included in the request:\n"
                     + resolution_warning
                     if resolution_warning else "")
+                hours_override_notice = ""
+                if duration_override_matches(self.record, payload):
+                    credited, elapsed = fireworks_duration_mismatch(payload)
+                    hours_override_notice = (
+                        f"\n\nHOURS OVERRIDE: {credited} credited training hours "
+                        f"over a {elapsed}-hour date/time span. "
+                        "The reviewed totalHours and timestamps will be sent unchanged.")
                 canonical_text = json.dumps(
                     payload, indent=2, ensure_ascii=False, allow_nan=False)
                 self.setting_formatted_request = True
@@ -1681,6 +1756,7 @@ def main(argv=None) -> int:
                 f"Title: {payload.get('assignTitle')}\n"
                 f"Start: {payload.get('startDt')}\n"
                 f"End: {payload.get('endDt')}\n"
+                f"Credit hours: {payload.get('totalHours')}\n"
                 f"Category: {category.name if category else payload.get('assignCat')}\n"
                 f"Location: {location.name if location else payload.get('location')}\n"
                 f"Station: {fireworks_mappings.station_name} "
@@ -1689,7 +1765,7 @@ def main(argv=None) -> int:
                 f"{instructor_review or '  • None'}\n"
                 f"Participants ({len(payload.get('staff', []))}):\n"
                 f"{staff_review or '  • None'}"
-                f"{omitted_people_notice}\n\n"
+                f"{omitted_people_notice}{hours_override_notice}\n\n"
                 "Submit this reviewed record now?")
             if answer != QtWidgets.QMessageBox.StandardButton.Yes:
                 return
@@ -1943,6 +2019,12 @@ def main(argv=None) -> int:
             if not self.setting_formatted_request and self.record is not None:
                 self.formatted_request_dirty = True
                 self.formatted_request_timer.start()
+                try:
+                    payload = self.visible_fireworks_payload()
+                except ValueError:
+                    payload = {}
+                self.sync_duration_override(payload)
+                self.update_fireworks_buttons()
 
         def save_formatted_request(self, show_confirmation=False):
             if self.setting_formatted_request or self.record is None:
@@ -2062,6 +2144,7 @@ def main(argv=None) -> int:
                 self.sync_fireworks_controls(visible_payload)
             except (json.JSONDecodeError, ValueError):
                 self.restore_fireworks_controls()
+                self.sync_duration_override({})
             request_errors = (
                 self.fireworks_payload_errors(
                     visible_payload, generated, unresolved)

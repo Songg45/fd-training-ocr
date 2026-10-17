@@ -117,6 +117,17 @@ the payload behind the reviewer's back. Invalid JSON is retained as a recoverabl
 **Regenerate from Structured Results** deliberately discards manual request edits. Results are
 automatically written to the configured export folder after processing, after edits, when
 moving with Previous/Next, and when closing the GUI; no separate export action is required.
+
+For a multi-day course whose credited hours differ from the elapsed date/time span, check
+**Override total-hours mismatch for this record** in **Formatted Request**. The credited
+hours and elapsed span are shown together, with **OVERRIDE ACTIVE** when approved. The exact
+JSON values stay unchanged. The approval is saved with that record and captured in the local
+attempt receipt, separately from the outgoing payload. Changing `startDt`, `endDt`, or
+`totalHours` requires a matching new approval; the override does not apply to another PDF.
+The final submission confirmation repeats both values. Invalid dates, end-before-start,
+nonpositive hours, and other validation errors are still checked. Uncheck the box to restore
+the normal hours-match requirement.
+
 Use **Process > Status** to see **Date of Class | PDF Number | Submitted?** for the PDFs
 currently loaded in the GUI. PDF Number is the one-based position shown at the top of the
 main window and used by Go To. Rows open in queue order, with the date and submission

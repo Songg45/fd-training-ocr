@@ -574,12 +574,52 @@ def _request_datetime(value: Any, name: str, errors: list[str]) -> datetime | No
         return None
 
 
+def fireworks_duration_mismatch(payload: Mapping[str, Any]) -> tuple[str, str] | None:
+    """Describe a valid credited-hours/elapsed-span mismatch without changing JSON."""
+    start = _request_datetime(payload.get("startDt"), "startDt", [])
+    end = _request_datetime(payload.get("endDt"), "endDt", [])
+    try:
+        hours = Decimal(str(payload.get("totalHours")))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    if (not hours.is_finite() or hours <= 0 or start is None
+            or end is None or end <= start):
+        return None
+    elapsed = Decimal(str((end - start).total_seconds())) / Decimal(3600)
+    if abs(hours - elapsed) <= Decimal(1) / Decimal(60):
+        return None
+    return (format(hours.normalize(), "f"),
+            format(elapsed.quantize(Decimal("0.01")).normalize(), "f"))
+
+
+def duration_override_matches(record: Mapping[str, Any], payload: Mapping[str, Any]) -> bool:
+    """Only the exact reviewed date/time interval and total hours may be overridden."""
+    override = record.get("fireworks_duration_override")
+    return (isinstance(override, Mapping)
+            and bool(override.get("approved_at"))
+            and fireworks_duration_mismatch(payload) is not None
+            and all(override.get(key) == payload.get(key)
+                    for key in ("startDt", "endDt", "totalHours")))
+
+
+def approve_duration_override(record: MutableMapping[str, Any],
+                              payload: Mapping[str, Any], approved_at: str) -> None:
+    """Keep approval beside the record, outside the exact outgoing request."""
+    if fireworks_duration_mismatch(payload) is None:
+        raise ValueError("The visible request has no valid total-hours mismatch to override")
+    record["fireworks_duration_override"] = {
+        **{key: payload[key] for key in ("startDt", "endDt", "totalHours")},
+        "approved_at": approved_at,
+    }
+
+
 def validate_fireworks_payload(
         payload: Mapping[str, Any], mappings: FireworksMappings,
         unresolved_staff: tuple[str, ...] = (), *,
         expected_staff_ids: tuple[int, ...] | None = None,
         unresolved_instructors: tuple[str, ...] = (),
-        expected_instructor_ids: tuple[int, ...] | None = None) -> tuple[str, ...]:
+        expected_instructor_ids: tuple[int, ...] | None = None,
+        allow_duration_mismatch: bool = False) -> tuple[str, ...]:
     """Return all reasons the visible request is unsafe to submit.
 
     Unresolved people are advisory: outside attendees and instructors may not
@@ -627,17 +667,12 @@ def validate_fireworks_payload(
     except (InvalidOperation, TypeError, ValueError):
         total_hours = None
         errors.append("totalHours must be a positive number")
-    if (total_hours is not None and start is not None and end is not None
-            and end > start):
-        duration_hours = Decimal(str((end - start).total_seconds())) / Decimal(3600)
-        one_minute = Decimal(1) / Decimal(60)
-        if abs(total_hours - duration_hours) > one_minute:
-            received = format(total_hours.normalize(), "f")
-            calculated = format(
-                duration_hours.quantize(Decimal("0.01")).normalize(), "f")
-            errors.append(
-                "totalHours must match the startDt/endDt duration "
-                f"(received {received}; calculated {calculated})")
+    mismatch = fireworks_duration_mismatch(payload)
+    if mismatch is not None and not allow_duration_mismatch:
+        received, calculated = mismatch
+        errors.append(
+            "totalHours must match the startDt/endDt duration "
+            f"(received {received}; calculated {calculated})")
 
     staff = payload.get("staff")
     if not isinstance(staff, list):

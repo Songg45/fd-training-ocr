@@ -15,7 +15,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from uuid import uuid4
 
-from .fireworks import fireworks_payload_hash, parse_fireworks_request
+from .fireworks import duration_override_matches, fireworks_payload_hash, parse_fireworks_request
 
 
 FIREWORKS_API_BASE = "https://webtrainingapi.eprsys.com/api"
@@ -481,6 +481,9 @@ class SubmissionLedger:
             "payload_sha256": fireworks_payload_hash(payload),
             "activity_fingerprint": activity_fingerprint(payload),
             "payload": dict(payload),
+            "duration_override": (
+                dict(record["fireworks_duration_override"])
+                if duration_override_matches(record, payload) else None),
             "activity_id": (
                 activity_id_from_response(response_payload)
                 if response_payload is not None else None),

@@ -11,6 +11,7 @@ from fd_training_ocr.fireworks_client import (
     DuplicateSubmissionError, FireworksClient, FireworksConnectionError,
     FireworksSubmissionRejected, FireworksSubmissionUnknown, SubmissionLedger,
     SubmissionCoordinator, _NoRedirectHandler)
+from fd_training_ocr.fireworks import approve_duration_override
 
 
 class FakeResponse:
@@ -318,6 +319,24 @@ class SubmissionLedgerTests(unittest.TestCase):
             self.assertEqual(entry["response_text"], '{"rc":1,"description":"bad"}')
             self.assertEqual(entry["response_body_sha256"], "d" * 64)
             self.assertTrue(entry["endpoint"].endswith("/TrnCommon/addActivity"))
+
+    def test_attempt_reservation_records_only_the_current_duration_override_outside_payload(self):
+        with TemporaryDirectory() as name:
+            ledger = SubmissionLedger(Path(name) / "submissions.jsonl")
+            record = self.record()
+            payload = dict(self.activity_payload(),
+                           startDt="2026-09-01T08:00:00.000Z",
+                           endDt="2026-09-24T12:00:00.000Z", totalHours="40")
+            approve_duration_override(record, payload, "2026-10-16T20:00:00+00:00")
+
+            entry = ledger.reserve(record=record, payload=payload)
+
+            self.assertEqual(entry["duration_override"], record["fireworks_duration_override"])
+            self.assertEqual(entry["payload"], payload)
+            self.assertNotIn("duration_override", entry["payload"])
+            changed = ledger.append(
+                record=record, payload=dict(payload, totalHours="48"), status="rejected")
+            self.assertIsNone(changed["duration_override"])
 
     def test_ambiguous_or_corrupt_ledger_line_fails_closed(self):
         with TemporaryDirectory() as name:

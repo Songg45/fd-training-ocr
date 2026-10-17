@@ -1,3 +1,4 @@
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -5,7 +6,8 @@ from tempfile import TemporaryDirectory
 from fd_training_ocr.fireworks import (FireworksCategory, FireworksInstructor,
                                        FireworksLocation,
                                        FireworksMappings, displayed_fireworks_request,
-                                       backfill_reviewed_instructors,
+                                       approve_duration_override, backfill_reviewed_instructors,
+                                       duration_override_matches, fireworks_duration_mismatch,
                                        fireworks_instructor_ids,
                                        fireworks_staff_ids, formatted_fireworks_request,
                                        load_fireworks_mappings, save_fireworks_request_edit,
@@ -227,6 +229,70 @@ class FireworksRequestTests(unittest.TestCase):
         self.assertEqual(
             validate_fireworks_payload(
                 payload, mappings, expected_staff_ids=(20,)), ())
+
+    def multi_day_payload(self):
+        mappings = self.mappings()
+        record = {"fields": {
+            "date": {"reviewed_value": "09/01/26"},
+            "start_time": {"reviewed_value": "08:00"},
+            "end_time": {"reviewed_value": "12:00"},
+            "total_hours": {"reviewed_value": "40"},
+            "description": {"reviewed_value": "Multi-day course"},
+        }}
+        payload = formatted_fireworks_request(
+            record, (20,), category=mappings.category_named("Company Training"),
+            location=mappings.location_named("Fire Station"), station_id=54)
+        payload["endDt"] = "2026-09-24T12:00:00.000Z"
+        return mappings, payload
+
+    def test_reviewed_duration_override_allows_40_hours_over_556_hour_span_without_json_changes(self):
+        mappings, payload = self.multi_day_payload()
+        before = json.dumps(payload, sort_keys=True)
+        record = {}
+        self.assertEqual(fireworks_duration_mismatch(payload), ("40", "556"))
+        self.assertIn(
+            "totalHours must match the startDt/endDt duration (received 40; calculated 556)",
+            validate_fireworks_payload(payload, mappings))
+
+        approve_duration_override(record, payload, "2026-10-16T20:00:00+00:00")
+        self.assertTrue(duration_override_matches(record, payload))
+        self.assertEqual(validate_fireworks_payload(
+            payload, mappings, allow_duration_mismatch=duration_override_matches(record, payload)), ())
+        self.assertEqual(json.dumps(payload, sort_keys=True), before)
+        self.assertNotIn("fireworks_duration_override", payload)
+
+    def test_duration_override_is_specific_to_this_record_dates_and_hours(self):
+        _mappings, payload = self.multi_day_payload()
+        record = {}
+        approve_duration_override(record, payload, "2026-10-16T20:00:00+00:00")
+        self.assertFalse(duration_override_matches({}, payload))
+        for key, value in (
+                ("startDt", "2026-09-02T08:00:00.000Z"),
+                ("endDt", "2026-09-25T12:00:00.000Z"), ("totalHours", "48")):
+            with self.subTest(changed=key):
+                self.assertFalse(duration_override_matches(record, dict(payload, **{key: value})))
+        self.assertTrue(duration_override_matches(record, dict(payload, assignTitle="Corrected title")))
+        persisted = json.loads(json.dumps(record))
+        self.assertTrue(duration_override_matches(persisted, payload))
+
+    def test_duration_override_does_not_bypass_invalid_dates_hours_or_other_validations(self):
+        mappings, payload = self.multi_day_payload()
+        for changes, expected_error in (
+                ({"totalHours": "0"}, "totalHours must be a positive number"),
+                ({"totalHours": "NaN"}, "totalHours must be a positive number"),
+                ({"startDt": "invalid"}, "startDt must use YYYY-MM-DDTHH:MM:SS.000Z"),
+                ({"endDt": payload["startDt"]}, "endDt must be later than startDt"),
+                ({"station": 999}, "station must be 54 (Pilot FD)")):
+            with self.subTest(changes=changes):
+                self.assertIn(expected_error, validate_fireworks_payload(
+                    dict(payload, **changes), mappings, allow_duration_mismatch=True))
+
+    def test_duration_override_cannot_be_approved_for_invalid_or_matching_hours(self):
+        _mappings, payload = self.multi_day_payload()
+        for value in ("0", "NaN", "556"):
+            with self.subTest(total_hours=value):
+                with self.assertRaisesRegex(ValueError, "no valid total-hours mismatch"):
+                    approve_duration_override({}, dict(payload, totalHours=value), "now")
 
     def test_submission_validation_requires_exact_reviewed_staff_ids(self):
         mappings = self.mappings()
