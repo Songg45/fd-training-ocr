@@ -655,11 +655,27 @@ def main(argv=None) -> int:
             table.setSelectionBehavior(
                 QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
             table.setAlternatingRowColors(True)
+
+            class StatusItem(QtWidgets.QTableWidgetItem):
+                def __init__(self, text, sort_key):
+                    super().__init__(text)
+                    self.sort_key = sort_key
+
+                def __lt__(self, other):
+                    return self.sort_key < other.sort_key
+
             for row_number, row in enumerate(rows):
+                try:
+                    class_date = datetime.strptime(row.date_of_class, "%m/%d/%y")
+                except ValueError:
+                    class_date = datetime.max
                 values = (row.date_of_class, str(row.pdf_number),
                           "True" if row.submitted else "False")
+                sort_keys = (
+                    (class_date, row.pdf_number), (row.pdf_number,),
+                    (row.submitted, row.pdf_number))
                 for column, value in enumerate(values):
-                    item = QtWidgets.QTableWidgetItem(value)
+                    item = StatusItem(value, sort_keys[column])
                     if column in (1, 2):
                         item.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
                     if column == 1:
@@ -671,10 +687,14 @@ def main(argv=None) -> int:
                 1, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
             table.horizontalHeader().setSectionResizeMode(
                 2, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+            table.horizontalHeader().setSortIndicator(
+                1, QtCore.Qt.SortOrder.AscendingOrder)
+            table.setSortingEnabled(True)
             layout.addWidget(table, 1)
 
             explanation = QtWidgets.QLabel(
                 "PDF Number matches the number at the top of the main window. "
+                "Click Submitted? to group by status, or PDF Number to restore queue order. "
                 "Submitted is True exactly when that PDF displays the "
                 "green Submitted to Fireworks banner.")
             explanation.setWordWrap(True)
