@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 import re
 import shutil
-from typing import Any, Callable, Mapping, MutableMapping
+from typing import Any, Callable, Iterable, Mapping, MutableMapping
 
 from .config import AppConfig
 from .export import FormRecord, source_sha256
@@ -80,6 +80,137 @@ def unprocessed_sources(sources: list[Path] | tuple[Path, ...],
                         records: Mapping[Path, Any]) -> tuple[Path, ...]:
     """Return queued PDFs that do not yet have a completed in-memory result."""
     return tuple(source for source in sources if source not in records)
+
+
+@dataclass(frozen=True)
+class ProcessStatusRow:
+    """One human-readable PDF submission status row."""
+
+    date_of_class: str
+    pdf_id: str
+    submitted: bool
+
+
+def load_exported_status_records(directory: Path) -> tuple[Mapping[str, Any], ...]:
+    """Load exported OCR records used by the process-status report."""
+    export_dir = directory.expanduser().resolve()
+    if not export_dir.is_dir():
+        return ()
+    records: list[Mapping[str, Any]] = []
+    for path in sorted(export_dir.glob("*.json"),
+                       key=lambda item: (item.name.casefold(), item.name)):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                f"exported status record {path.name} is not readable JSON") from exc
+        if not isinstance(payload, Mapping):
+            raise ValueError(
+                f"exported status record {path.name} must contain a JSON object")
+        if payload.get("source_file") or payload.get("source_sha256"):
+            records.append(payload)
+    return tuple(records)
+
+
+def _status_identity(item: Mapping[str, Any]) -> tuple[str, str, str] | None:
+    page = str(item.get("page") if item.get("page") is not None else "")
+    digest = str(item.get("source_sha256") or "").strip()
+    if digest:
+        return "sha256", digest, page
+    source_file = str(item.get("source_file") or "").strip()
+    if source_file:
+        return "file", Path(source_file).name.casefold(), page
+    return None
+
+
+def _status_pdf_id(item: Mapping[str, Any]) -> str:
+    source_file = str(item.get("source_file") or "").strip()
+    if source_file:
+        pdf_id = Path(source_file).name
+    else:
+        digest = str(item.get("source_sha256") or "").strip()
+        pdf_id = digest[:12] if digest else "Unknown PDF"
+    page = item.get("page")
+    if page not in (None, "", 1, "1"):
+        pdf_id += f" — page {page}"
+    return pdf_id
+
+
+def _status_class_date(item: Mapping[str, Any]) -> str:
+    fields = item.get("fields")
+    if isinstance(fields, Mapping):
+        field = fields.get("date")
+        if isinstance(field, Mapping):
+            value = display_value(field)
+            if value not in (None, ""):
+                text = str(value).strip()
+                return canonical_date(text) or text
+    payload = item.get("payload")
+    if isinstance(payload, Mapping):
+        start = str(payload.get("startDt") or "").strip()
+        if start:
+            date_text = start[:10]
+            return canonical_date(date_text) or date_text
+    return ""
+
+
+def process_status_rows(
+        sources: Iterable[Path], records: Iterable[Mapping[str, Any]],
+        submission_entries: Iterable[Mapping[str, Any]]) -> tuple[ProcessStatusRow, ...]:
+    """Combine queued/exported records with authoritative ledger submission states."""
+    by_identity: dict[tuple[str, str, str], dict[str, Any]] = {}
+    submitted_by_identity: dict[tuple[str, str, str], bool] = {}
+
+    for record in records:
+        if not isinstance(record, Mapping):
+            continue
+        identity = _status_identity(record)
+        if identity is not None:
+            by_identity[identity] = {
+                "date": _status_class_date(record),
+                "pdf_id": _status_pdf_id(record),
+            }
+
+    for entry in submission_entries:
+        if not isinstance(entry, Mapping):
+            continue
+        identity = _status_identity(entry)
+        if identity is None:
+            continue
+        submitted = entry.get("status") == "submitted"
+        submitted_by_identity[identity] = (
+            submitted_by_identity.get(identity, False) or submitted)
+        if identity not in by_identity:
+            by_identity[identity] = {
+                "date": _status_class_date(entry),
+                "pdf_id": _status_pdf_id(entry),
+            }
+
+    known_pdf_ids = {
+        str(item["pdf_id"]).casefold() for item in by_identity.values()
+    }
+    for source in sources:
+        resolved = source.expanduser().resolve()
+        if resolved.name.casefold() in known_pdf_ids:
+            continue
+        identity = ("queue", str(resolved).casefold(), "")
+        by_identity[identity] = {"date": "", "pdf_id": resolved.name}
+        known_pdf_ids.add(resolved.name.casefold())
+
+    rows = [
+        ProcessStatusRow(
+            str(values["date"]), str(values["pdf_id"]),
+            submitted_by_identity.get(identity, False))
+        for identity, values in by_identity.items()
+    ]
+
+    def sort_key(row: ProcessStatusRow):
+        canonical = canonical_date(row.date_of_class)
+        parsed = (datetime.strptime(canonical, "%m/%d/%y")
+                  if canonical is not None else datetime.max)
+        return (canonical is None, parsed, row.pdf_id.casefold(), row.pdf_id)
+
+    return tuple(sorted(rows, key=sort_key))
 
 
 def display_value(field: Mapping[str, Any]) -> Any:

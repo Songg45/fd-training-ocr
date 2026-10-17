@@ -15,7 +15,10 @@ from fd_training_ocr.gui_controller import (GuiPaths, accept_stage3_suggestion, 
                                              create_startup_backup,
                                              build_processor, display_value, effective_event_selection,
                                              effective_facilities,
-                                             discover_pdfs, export_record, index_after_removal, structured_rows,
+                                             discover_pdfs, export_record, index_after_removal,
+                                             load_exported_status_records,
+                                             process_status_rows, ProcessStatusRow,
+                                             structured_rows,
                                              queue_index_for_page,
                                              load_gui_state, save_gui_state, unprocessed_sources,
                                              attendee_row_from_field, remove_attendee,
@@ -30,6 +33,60 @@ from fd_training_ocr.gui_controller import (GuiPaths, accept_stage3_suggestion, 
 
 
 class GuiControllerTests(unittest.TestCase):
+    def test_process_status_combines_queue_records_exports_and_ledger(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            queued = root / "queued.pdf"
+            unprocessed = root / "unprocessed.pdf"
+            queued.write_bytes(b"queued")
+            unprocessed.write_bytes(b"unprocessed")
+            record = {
+                "source_file": "queued.pdf", "source_sha256": "queued-sha",
+                "page": 1,
+                "fields": {"date": {"reviewed_value": "8/4/26"}},
+                "fireworks_submission": {"status": "submitted"},
+            }
+            ledger = ({
+                "source_file": "queued.pdf", "source_sha256": "queued-sha",
+                "page": 1, "status": "submitted",
+                "payload": {"startDt": "2026-08-04T00:00:00.000Z"},
+            },)
+
+            self.assertEqual(
+                process_status_rows((queued, unprocessed), (record,), ledger),
+                (
+                    ProcessStatusRow("08/04/26", "queued.pdf", True),
+                    ProcessStatusRow("", "unprocessed.pdf", False),
+                ),
+            )
+
+    def test_process_status_uses_ledger_only_and_does_not_trust_record_banner(self):
+        record = {
+            "source_file": "local-only.pdf", "source_sha256": "local-sha",
+            "page": 1, "fields": {"date": {"normalized": "09/19/26"}},
+            "fireworks_submission": {"status": "submitted"},
+        }
+        ledger_only = {
+            "source_file": "ledger-only.pdf", "source_sha256": "ledger-sha",
+            "page": 1, "status": "submitted",
+            "payload": {"startDt": "2026-10-04T00:00:00.000Z"},
+        }
+
+        self.assertEqual(
+            process_status_rows((), (record,), (ledger_only,)),
+            (
+                ProcessStatusRow("09/19/26", "local-only.pdf", False),
+                ProcessStatusRow("10/04/26", "ledger-only.pdf", True),
+            ),
+        )
+
+    def test_load_exported_status_records_rejects_corrupt_json(self):
+        with tempfile.TemporaryDirectory() as directory:
+            export_dir = Path(directory)
+            (export_dir / "bad.json").write_text("{bad", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "bad.json"):
+                load_exported_status_records(export_dir)
+
     def test_add_attendee_roster_linking_is_bidirectional_and_preserves_unknowns(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -384,6 +384,10 @@ class SubmissionLedger:
         states.sort(key=lambda item: item[0])
         return tuple(entry for _line_number, entry in states)
 
+    def effective_entries(self) -> tuple[Mapping[str, Any], ...]:
+        """Return the authoritative current state of every ledger attempt."""
+        return self._effective_entries()
+
     @staticmethod
     def _matches(
             entry: Mapping[str, Any], *, source_sha256: str,

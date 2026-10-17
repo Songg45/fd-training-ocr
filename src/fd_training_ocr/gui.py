@@ -19,7 +19,8 @@ from .gui_controller import (EVENT_SELECTIONS, GuiPaths, accept_stage3_suggestio
                              populate_unit_from_roster_name,
                              automatic_export, build_processor, effective_event_selection,
                              create_startup_backup,
-                             load_gui_state, process_pdf, save_gui_state,
+                             load_exported_status_records, load_gui_state,
+                             process_pdf, process_status_rows, save_gui_state,
                              discover_pdfs, display_value, index_after_removal, structured_rows,
                              queue_index_for_page,
                              attendee_row_from_field, remove_attendee, roster_table_rows,
@@ -274,6 +275,7 @@ def main(argv=None) -> int:
             self.page_label = QtWidgets.QLabel("0 of 0")
             self.process_button = QtGui.QAction("Process Selected", self)
             self.process_all_button = QtGui.QAction("Process All", self)
+            self.process_status_button = QtGui.QAction("Status", self)
             self.stop_button = QtWidgets.QPushButton("Stop After Current")
             self.delete_attendee_button = QtGui.QAction("Delete Attendee", self)
             self.add_attendee_button = QtGui.QAction("Add Attendee", self)
@@ -302,7 +304,8 @@ def main(argv=None) -> int:
             self.remove_menu_button = menu_tool(
                 "Remove", (self.remove_button, self.remove_all_button))
             self.process_menu_button = menu_tool(
-                "Process", (self.process_button, self.process_all_button))
+                "Process", (self.process_button, self.process_all_button,
+                            self.process_status_button))
             self.attendees_menu_button = menu_tool(
                 "Attendees", (self.add_attendee_button, self.delete_attendee_button))
             self.remove_button.setEnabled(False)
@@ -310,6 +313,7 @@ def main(argv=None) -> int:
             self.previous_button.setEnabled(False); self.next_button.setEnabled(False)
             self.goto_number.setEnabled(False); self.goto_button.setEnabled(False)
             self.process_button.setEnabled(False); self.process_all_button.setEnabled(False)
+            self.process_status_button.setEnabled(True)
             self.stop_button.setEnabled(False)
             self.delete_attendee_button.setEnabled(False)
             self.add_attendee_button.setEnabled(False)
@@ -446,6 +450,7 @@ def main(argv=None) -> int:
             self.goto_number.lineEdit().returnPressed.connect(self.go_to_pdf)
             self.process_button.triggered.connect(self.process)
             self.process_all_button.triggered.connect(self.process_all)
+            self.process_status_button.triggered.connect(self.show_process_status)
             self.stop_button.clicked.connect(self.request_stop)
             self.delete_attendee_button.triggered.connect(self.delete_selected_attendee)
             self.add_attendee_button.triggered.connect(self.add_attendee_dialog)
@@ -603,6 +608,72 @@ def main(argv=None) -> int:
             dialog.exec()
             if self.record is not None:
                 self.display_record(self.record)
+
+        def show_process_status(self):
+            """Show queued and exported PDFs with their durable submission status."""
+            try:
+                exported = load_exported_status_records(args.export_dir)
+                in_memory = tuple(
+                    record for record in self.records.values()
+                    if isinstance(record, dict))
+                rows = process_status_rows(
+                    self.sources, (*exported, *in_memory),
+                    fireworks_ledger.effective_entries())
+            except (OSError, ValueError) as exc:
+                QtWidgets.QMessageBox.critical(
+                    self, "Unable to build process status", str(exc))
+                return
+
+            dialog = QtWidgets.QDialog(self)
+            dialog.setWindowTitle("Process Status")
+            dialog.resize(850, 650)
+            layout = QtWidgets.QVBoxLayout(dialog)
+            submitted_count = sum(row.submitted for row in rows)
+            summary = QtWidgets.QLabel(
+                f"{len(rows)} PDF record{'s' if len(rows) != 1 else ''} — "
+                f"{submitted_count} submitted — "
+                f"{len(rows) - submitted_count} not submitted")
+            summary.setAccessibleName("Process status summary")
+            layout.addWidget(summary)
+
+            table = QtWidgets.QTableWidget(len(rows), 3)
+            table.setHorizontalHeaderLabels(
+                ["Date of Class", "PDF ID", "Submitted?"])
+            table.setAccessibleName("PDF process status")
+            table.setAccessibleDescription(
+                "Date of class, PDF identifier, and durable submission status")
+            table.setEditTriggers(
+                QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+            table.setSelectionBehavior(
+                QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+            table.setAlternatingRowColors(True)
+            for row_number, row in enumerate(rows):
+                values = (row.date_of_class, row.pdf_id,
+                          "True" if row.submitted else "False")
+                for column, value in enumerate(values):
+                    item = QtWidgets.QTableWidgetItem(value)
+                    if column == 2:
+                        item.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+                    table.setItem(row_number, column, item)
+            table.horizontalHeader().setSectionResizeMode(
+                0, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+            table.horizontalHeader().setSectionResizeMode(
+                1, QtWidgets.QHeaderView.ResizeMode.Stretch)
+            table.horizontalHeader().setSectionResizeMode(
+                2, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+            table.setSortingEnabled(True)
+            layout.addWidget(table, 1)
+
+            explanation = QtWidgets.QLabel(
+                "Submitted is True only when the durable submission ledger's "
+                "effective status is submitted.")
+            explanation.setWordWrap(True)
+            layout.addWidget(explanation)
+            buttons = QtWidgets.QDialogButtonBox(
+                QtWidgets.QDialogButtonBox.StandardButton.Close)
+            buttons.rejected.connect(dialog.reject)
+            layout.addWidget(buttons)
+            dialog.exec()
 
         def load_pdfs(self):
             names, _ = QtWidgets.QFileDialog.getOpenFileNames(self, "Add training forms", "", "PDF files (*.pdf)")
@@ -789,6 +860,7 @@ def main(argv=None) -> int:
             self.process_button.setEnabled(idle and self.source is not None)
             self.process_all_button.setEnabled(
                 idle and bool(unprocessed_sources(self.sources, self.records)))
+            self.process_status_button.setEnabled(idle)
             self.stop_button.setEnabled(
                 self.busy and self.batch_total > 0 and not self.stop_requested)
             self.add_attendee_button.setEnabled(idle and self.record is not None)
@@ -804,7 +876,8 @@ def main(argv=None) -> int:
                 (self.remove_menu_button,
                  (self.remove_button, self.remove_all_button)),
                 (self.process_menu_button,
-                 (self.process_button, self.process_all_button)),
+                 (self.process_button, self.process_all_button,
+                  self.process_status_button)),
                 (self.attendees_menu_button,
                  (self.add_attendee_button, self.delete_attendee_button)),
             )

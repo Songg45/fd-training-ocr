@@ -117,6 +117,10 @@ the payload behind the reviewer's back. Invalid JSON is retained as a recoverabl
 **Regenerate from Structured Results** deliberately discards manual request edits. Results are
 automatically written to the configured export folder after processing, after edits, when
 moving with Previous/Next, and when closing the GUI; no separate export action is required.
+Use **Process > Status** to open a sortable, read-only summary with the class date, source
+PDF filename, and submission state for queued, exported, and ledger-only records. A row says
+`True` only when the durable submission ledger's effective state is `submitted`; processed,
+rejected, attempting, and indeterminate records remain `False`.
 At startup the GUI snapshots exported JSON, roster, queue state, and configuration into an
 immutable dated and timed folder such as
 `C:\Temp\FDTrainingOCR-Backups\08-22-2026\19-42-10`. Every launch creates a recovery point;
