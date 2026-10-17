@@ -46,64 +46,42 @@ class GuiControllerTests(unittest.TestCase):
                 "fields": {"date": {"reviewed_value": "8/4/26"}},
                 "fireworks_submission": {"status": "submitted"},
             }
-            ledger = ({
-                "source_file": "queued.pdf", "source_sha256": "queued-sha",
-                "page": 1, "status": "submitted",
-                "payload": {"startDt": "2026-08-04T00:00:00.000Z"},
-            },)
-
             self.assertEqual(
-                process_status_rows((queued, unprocessed), (record,), ledger),
+                process_status_rows((queued, unprocessed), (record,)),
                 (
                     ProcessStatusRow("08/04/26", "queued.pdf", True),
                     ProcessStatusRow("", "unprocessed.pdf", False),
                 ),
             )
 
-    def test_process_status_uses_ledger_only_and_does_not_trust_record_banner(self):
+    def test_process_status_exactly_uses_record_green_banner_state(self):
         record = {
             "source_file": "local-only.pdf", "source_sha256": "local-sha",
             "page": 1, "fields": {"date": {"normalized": "09/19/26"}},
             "fireworks_submission": {"status": "submitted"},
         }
-        ledger_only = {
-            "source_file": "ledger-only.pdf", "source_sha256": "ledger-sha",
-            "page": 1, "status": "submitted",
-            "payload": {"startDt": "2026-10-04T00:00:00.000Z"},
-        }
 
         self.assertEqual(
-            process_status_rows((), (record,), (ledger_only,)),
-            (
-                ProcessStatusRow("09/19/26", "local-only.pdf", False),
-                ProcessStatusRow("10/04/26", "ledger-only.pdf", True),
-            ),
+            process_status_rows((), (record,)),
+            (ProcessStatusRow("09/19/26", "local-only.pdf", True),),
         )
 
-    def test_process_status_uses_stable_hash_when_filenames_conflict(self):
+    def test_process_status_non_submitted_record_is_false(self):
         records = (
             {
-                "source_file": "2.pdf", "source_sha256": "hash-for-3",
-                "page": 1, "fields": {"date": {"normalized": "08/02/26"}},
-            },
-            {
-                "source_file": "3.pdf", "source_sha256": "hash-for-2",
-                "page": 1, "fields": {"date": {"normalized": "08/03/26"}},
-            },
-        )
-        ledger = (
-            {
                 "source_file": "2.pdf", "source_sha256": "hash-for-2",
-                "page": 1, "status": "submitted",
+                "page": 1, "fields": {"date": {"normalized": "08/02/26"}},
+                "fireworks_submission": {"status": "rejected"},
             },
             {
                 "source_file": "3.pdf", "source_sha256": "hash-for-3",
-                "page": 1, "status": "rejected",
+                "page": 1, "fields": {"date": {"normalized": "08/03/26"}},
+                "fireworks_submission": {"status": "submitted"},
             },
         )
 
         self.assertEqual(
-            process_status_rows((), records, ledger),
+            process_status_rows((), records),
             (
                 ProcessStatusRow("08/02/26", "2.pdf", False),
                 ProcessStatusRow("08/03/26", "3.pdf", True),

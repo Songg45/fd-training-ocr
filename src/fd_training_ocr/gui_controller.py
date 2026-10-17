@@ -91,6 +91,13 @@ class ProcessStatusRow:
     submitted: bool
 
 
+def record_is_submitted(record: Mapping[str, Any]) -> bool:
+    """Return whether this record receives the persistent green banner."""
+    submission = record.get("fireworks_submission", {})
+    return (isinstance(submission, Mapping)
+            and submission.get("status") == "submitted")
+
+
 def load_exported_status_records(directory: Path) -> tuple[Mapping[str, Any], ...]:
     """Load exported OCR records used by the process-status report."""
     export_dir = directory.expanduser().resolve()
@@ -155,11 +162,10 @@ def _status_class_date(item: Mapping[str, Any]) -> str:
 
 
 def process_status_rows(
-        sources: Iterable[Path], records: Iterable[Mapping[str, Any]],
-        submission_entries: Iterable[Mapping[str, Any]]) -> tuple[ProcessStatusRow, ...]:
-    """Combine queued/exported records with authoritative ledger submission states."""
+        sources: Iterable[Path],
+        records: Iterable[Mapping[str, Any]]) -> tuple[ProcessStatusRow, ...]:
+    """Report the same per-record submitted state used by the green banner."""
     by_identity: dict[tuple[str, str, str], dict[str, Any]] = {}
-    submitted_by_identity: dict[tuple[str, str, str], bool] = {}
 
     for record in records:
         if not isinstance(record, Mapping):
@@ -169,21 +175,7 @@ def process_status_rows(
             by_identity[identity] = {
                 "date": _status_class_date(record),
                 "pdf_id": _status_pdf_id(record),
-            }
-
-    for entry in submission_entries:
-        if not isinstance(entry, Mapping):
-            continue
-        identity = _status_identity(entry)
-        if identity is None:
-            continue
-        submitted = entry.get("status") == "submitted"
-        submitted_by_identity[identity] = (
-            submitted_by_identity.get(identity, False) or submitted)
-        if identity not in by_identity:
-            by_identity[identity] = {
-                "date": _status_class_date(entry),
-                "pdf_id": _status_pdf_id(entry),
+                "submitted": record_is_submitted(record),
             }
 
     known_pdf_ids = {
@@ -194,14 +186,15 @@ def process_status_rows(
         if resolved.name.casefold() in known_pdf_ids:
             continue
         identity = ("queue", str(resolved).casefold(), "")
-        by_identity[identity] = {"date": "", "pdf_id": resolved.name}
+        by_identity[identity] = {
+            "date": "", "pdf_id": resolved.name, "submitted": False}
         known_pdf_ids.add(resolved.name.casefold())
 
     rows = [
         ProcessStatusRow(
             str(values["date"]), str(values["pdf_id"]),
-            submitted_by_identity.get(identity, False))
-        for identity, values in by_identity.items()
+            bool(values["submitted"]))
+        for values in by_identity.values()
     ]
 
     def sort_key(row: ProcessStatusRow):

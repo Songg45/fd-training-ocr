@@ -118,12 +118,10 @@ the payload behind the reviewer's back. Invalid JSON is retained as a recoverabl
 automatically written to the configured export folder after processing, after edits, when
 moving with Previous/Next, and when closing the GUI; no separate export action is required.
 Use **Process > Status** to open a sortable, read-only summary with the class date, source
-PDF filename, and submission state for queued, exported, and ledger-only records. A row says
-`True` only when the durable submission ledger's effective state is `submitted`; processed,
-rejected, attempting, and indeterminate records remain `False`. Status entries are associated
-with the stable source hash and page, falling back to the displayed PDF filename only when a
-hash is unavailable. Opening the report durably reconciles historical `rejected` entries only
-when their preserved Fireworks response explicitly affirms that the activity was created.
+PDF filename, and submission state for queued and exported records. Before building the report,
+each record is reconciled through the same submission path used when that PDF is displayed. A
+row says `True` exactly when the corresponding PDF displays the green **Submitted to Fireworks**
+banner; records without that banner remain `False`.
 At startup the GUI snapshots exported JSON, roster, queue state, and configuration into an
 immutable dated and timed folder such as
 `C:\Temp\FDTrainingOCR-Backups\08-22-2026\19-42-10`. Every launch creates a recovery point;

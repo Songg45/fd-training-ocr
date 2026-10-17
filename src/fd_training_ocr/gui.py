@@ -20,7 +20,8 @@ from .gui_controller import (EVENT_SELECTIONS, GuiPaths, accept_stage3_suggestio
                              automatic_export, build_processor, effective_event_selection,
                              create_startup_backup,
                              load_exported_status_records, load_gui_state,
-                             process_pdf, process_status_rows, save_gui_state,
+                             process_pdf, process_status_rows,
+                             record_is_submitted, save_gui_state,
                              discover_pdfs, display_value, index_after_removal, structured_rows,
                              queue_index_for_page,
                              attendee_row_from_field, remove_attendee, roster_table_rows,
@@ -88,8 +89,7 @@ def fireworks_response_popup_text(
 def record_banner_state(record: dict) -> tuple[str, str]:
     """Return the persistent top-banner text and color for one record."""
     submission = record.get("fireworks_submission", {})
-    if (isinstance(submission, dict)
-            and submission.get("status") == "submitted"):
+    if record_is_submitted(record):
         activity_id = submission.get("activity_id")
         activity_suffix = (
             f" — Activity ID: {activity_id}"
@@ -610,16 +610,24 @@ def main(argv=None) -> int:
                 self.display_record(self.record)
 
         def show_process_status(self):
-            """Show queued and exported PDFs with their durable submission status."""
+            """Show the same submitted state used by each PDF's green banner."""
             try:
-                repaired_receipts = fireworks_ledger.reconcile_explicit_successes()
                 exported = load_exported_status_records(args.export_dir)
                 in_memory = tuple(
                     record for record in self.records.values()
                     if isinstance(record, dict))
-                rows = process_status_rows(
-                    self.sources, (*exported, *in_memory),
-                    fireworks_ledger.effective_entries())
+                records = (*exported, *in_memory)
+                reconciled_any = False
+                for record in records:
+                    if not isinstance(record, dict):
+                        continue
+                    reconciled, _entry = fireworks_submissions.reconcile_record(record)
+                    if reconciled:
+                        automatic_export(record, args.export_dir)
+                        reconciled_any = True
+                if reconciled_any:
+                    self.persist_state()
+                rows = process_status_rows(self.sources, records)
             except (OSError, ValueError) as exc:
                 QtWidgets.QMessageBox.critical(
                     self, "Unable to build process status", str(exc))
@@ -633,10 +641,7 @@ def main(argv=None) -> int:
             summary = QtWidgets.QLabel(
                 f"{len(rows)} PDF record{'s' if len(rows) != 1 else ''} — "
                 f"{submitted_count} submitted — "
-                f"{len(rows) - submitted_count} not submitted"
-                + (f" — {repaired_receipts} historical creation receipt"
-                   f"{'s' if repaired_receipts != 1 else ''} reconciled"
-                   if repaired_receipts else ""))
+                f"{len(rows) - submitted_count} not submitted")
             summary.setAccessibleName("Process status summary")
             layout.addWidget(summary)
 
@@ -669,8 +674,8 @@ def main(argv=None) -> int:
             layout.addWidget(table, 1)
 
             explanation = QtWidgets.QLabel(
-                "Submitted is True only when the durable submission ledger's "
-                "effective status is submitted.")
+                "Submitted is True exactly when this PDF record displays the "
+                "green Submitted to Fireworks banner.")
             explanation.setWordWrap(True)
             layout.addWidget(explanation)
             buttons = QtWidgets.QDialogButtonBox(

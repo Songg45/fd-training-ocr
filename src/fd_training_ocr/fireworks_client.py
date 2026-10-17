@@ -384,38 +384,6 @@ class SubmissionLedger:
         states.sort(key=lambda item: item[0])
         return tuple(entry for _line_number, entry in states)
 
-    def effective_entries(self) -> tuple[Mapping[str, Any], ...]:
-        """Return the authoritative current state of every ledger attempt."""
-        return self._effective_entries()
-
-    def reconcile_explicit_successes(self) -> int:
-        """Durably repair historical rejections with explicit creation receipts."""
-        repaired = 0
-        for entry in self._effective_entries():
-            response = entry.get("response")
-            payload = entry.get("payload")
-            if (entry.get("status") != "rejected"
-                    or not isinstance(response, Mapping)
-                    or not isinstance(payload, Mapping)
-                    or not _response_affirms_activity_created(response)):
-                continue
-            self.append(
-                record=entry, payload=payload, status="submitted",
-                attempt_id=(str(entry.get("attempt_id") or "").strip() or None),
-                endpoint=str(entry.get("endpoint") or FIREWORKS_API_BASE),
-                response=response,
-                response_status=entry.get("response_status"),
-                response_text=entry.get("response_text"),
-                response_body_sha256=entry.get("response_body_sha256"),
-                reconciliation={
-                    "decision": "explicit_success_response_reclassified",
-                    "prior_status": "rejected",
-                    "review_method": (
-                        "automatic repair for the observed addActivity success message"),
-                })
-            repaired += 1
-        return repaired
-
     @staticmethod
     def _matches(
             entry: Mapping[str, Any], *, source_sha256: str,
