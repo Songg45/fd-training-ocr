@@ -12,6 +12,7 @@ import sys
 import tempfile
 
 from .config import load_config
+from .export import source_sha256
 from .gui_controller import (EVENT_SELECTIONS, GuiPaths, accept_stage3_suggestion,
                              apply_event_selection, apply_gui_edit,
                              apply_roster_linked_unit_edit,
@@ -234,6 +235,7 @@ def main(argv=None) -> int:
             self.source = None
             self.record = None
             self.records = {}
+            self.submission_records = {}
             self.human_reviews = {}
             self.failures = {}
             self.saved_queue_path = None
@@ -616,6 +618,7 @@ def main(argv=None) -> int:
                  self.failures, self.saved_queue_path, self.human_reviews) = previous
                 raise
             self.preview_paths = dict(preview_paths) if preview_paths is not None else {}
+            self.submission_records = {}
             self.update_queue_title()
             if self.current_index >= 0:
                 self.show_current()
@@ -790,21 +793,41 @@ def main(argv=None) -> int:
             if self.record is not None:
                 self.display_record(self.record)
 
+        def status_record_for_source(self, source):
+            """Read submission receipts for an unprocessed PDF without inventing OCR."""
+            if source in self.records:
+                return self.records[source]
+            if source not in self.submission_records:
+                record = {"source_file": source.name,
+                          "source_sha256": source_sha256(source), "page": 1}
+                fireworks_submissions.reconcile_record(record)
+                self.submission_records[source] = record
+            return self.submission_records[source]
+
+        def pending_batch_sources(self):
+            for source in self.sources:
+                if source not in self.records:
+                    self.status_record_for_source(source)
+            return unprocessed_sources(
+                self.sources, self.records, self.human_reviews, self.submission_records)
+
         def show_process_status(self):
             """Show the same submitted state used by each PDF's green banner."""
             try:
                 reconciled_any = False
+                status_records = {source: self.status_record_for_source(source)
+                                  for source in self.sources}
                 for source in self.sources:
-                    record = self.records.get(source)
+                    record = status_records.get(source)
                     if not isinstance(record, dict):
                         continue
                     reconciled, _entry = fireworks_submissions.reconcile_record(record)
-                    if reconciled:
+                    if reconciled and source in self.records:
                         automatic_export(record, args.export_dir)
                         reconciled_any = True
                 if reconciled_any:
                     self.persist_state()
-                rows = process_status_rows(self.sources, self.records, self.human_reviews)
+                rows = process_status_rows(self.sources, status_records, self.human_reviews)
             except (OSError, ValueError) as exc:
                 QtWidgets.QMessageBox.critical(
                     self, "Unable to build process status", str(exc))
@@ -861,7 +884,7 @@ def main(argv=None) -> int:
                     else:
                         self.human_reviews[source] = previous
                     displayed = process_status_rows(
-                        [source], self.records, self.human_reviews)[0].human_review
+                        [source], status_records, self.human_reviews)[0].human_review
                     combo.blockSignals(True)
                     combo.setCurrentIndex(combo.findData(displayed)
                                           if displayed is not None else -1)
@@ -947,8 +970,8 @@ def main(argv=None) -> int:
                 "Mark Already Submitted…", QtWidgets.QDialogButtonBox.ButtonRole.ActionRole)
             mark_status_button.setAccessibleName("Mark selected PDF already submitted")
             mark_status_button.setToolTip(
-                "Select a processed PDF, confirm it already exists in Fireworks, "
-                "and record it locally without sending a request")
+                "Select any PDF, confirm it already exists in Fireworks, "
+                "and record it locally without OCR or sending a request")
             mark_status_button.setEnabled(False)
             target_index = None
 
@@ -962,7 +985,7 @@ def main(argv=None) -> int:
             def update_status_actions():
                 source = selected_source()
                 go_to_button.setEnabled(source is not None)
-                record = self.records.get(source)
+                record = status_records.get(source)
                 submission = record.get("fireworks_submission", {}) if isinstance(record, dict) else {}
                 locked = (isinstance(submission, dict)
                           and submission.get("status") in LOCKED_SUBMISSION_STATUSES)
@@ -974,16 +997,18 @@ def main(argv=None) -> int:
                     return
                 self.mark_already_submitted(source)
                 try:
-                    for record in self.records.values():
+                    status_records.update({source: self.status_record_for_source(source)
+                                           for source in self.sources})
+                    for path, record in status_records.items():
                         if isinstance(record, dict):
                             changed, _entry = fireworks_submissions.reconcile_record(record)
-                            if changed:
+                            if changed and path in self.records:
                                 automatic_export(record, args.export_dir)
                     self.persist_state(raise_errors=True)
                 except (OSError, ValueError) as exc:
                     QtWidgets.QMessageBox.critical(
                         dialog, "Unable to refresh submission status", str(exc))
-                refreshed = process_status_rows(self.sources, self.records, self.human_reviews)
+                refreshed = process_status_rows(self.sources, status_records, self.human_reviews)
                 submitted = sum(row.submitted for row in refreshed)
                 summary.setText(
                     f"{len(refreshed)} PDF record{'s' if len(refreshed) != 1 else ''} — "
@@ -1152,6 +1177,7 @@ def main(argv=None) -> int:
                 self.save_formatted_request()
             source = self.sources.pop(self.current_index)
             self.records.pop(source, None)
+            self.submission_records.pop(source, None)
             self.failures.pop(source, None)
             self.human_reviews.pop(source, None)
             self.preview_paths.pop(source, None)
@@ -1208,8 +1234,21 @@ def main(argv=None) -> int:
                 self.formatted_request_dirty = False
                 self.set_formatted_request_message("")
                 self.sync_fireworks_controls({})
+                status_record = self.status_record_for_source(self.source)
+                fireworks_submissions.reconcile_record(status_record)
+                self.fireworks_ledger_error = None
                 failure = self.failures.get(self.source)
-                if failure:
+                if record_is_submitted(status_record):
+                    self.raw.setPlainText(json.dumps(status_record, indent=2, ensure_ascii=False))
+                    banner, color = record_banner_state(status_record)
+                    self.set_record_banner(banner, color)
+                    activity_id = status_record.get("fireworks_submission", {}).get("activity_id")
+                    self.set_formatted_request_message(
+                        "SUBMITTED TO FIREWORKS"
+                        + (f" — activity {activity_id}" if activity_id else "")
+                        + " — OCR not run", "#286428")
+                    self.status.setText("Already submitted — OCR not run")
+                elif failure:
                     self.set_record_banner(
                         f"PROCESSING FAILED — {failure}", "#8b1e1e")
                     self.status.setText("Processing failed — retry with Process or Process All")
@@ -1240,8 +1279,12 @@ def main(argv=None) -> int:
             self.open_queue_button.setEnabled(idle)
             self.new_queue_button.setEnabled(idle)
             self.process_button.setEnabled(idle and self.source is not None)
-            self.process_all_button.setEnabled(
-                idle and bool(unprocessed_sources(self.sources, self.records, self.human_reviews)))
+            try:
+                pending = self.pending_batch_sources() if idle else ()
+            except (OSError, ValueError) as exc:
+                pending = ()
+                self.status.setText(f"Unable to read submission status; Process All disabled: {exc}")
+            self.process_all_button.setEnabled(idle and bool(pending))
             self.process_status_button.setEnabled(idle)
             self.stop_button.setEnabled(
                 self.busy and self.batch_total > 0 and not self.stop_requested)
@@ -1454,10 +1497,14 @@ def main(argv=None) -> int:
             self.poll_timer.start()
 
         def process_all(self):
-            pending = list(unprocessed_sources(self.sources, self.records, self.human_reviews))
+            try:
+                pending = list(self.pending_batch_sources())
+            except (OSError, ValueError) as exc:
+                QtWidgets.QMessageBox.critical(self, "Unable to check submission status", str(exc))
+                return
             if not pending:
                 self.status.setText(
-                    "No PDFs need batch OCR — all are already processed or marked Human Review=True")
+                    "No PDFs need batch OCR — all are processed, submitted, or marked Human Review=True")
                 return
             self.batch_queue = pending
             self.batch_total = len(pending)
@@ -1701,8 +1748,8 @@ def main(argv=None) -> int:
         def update_fireworks_buttons(self):
             active = self.fireworks_future is not None
             idle = not self.busy and not active
-            submission = (self.record.get("fireworks_submission", {})
-                          if isinstance(self.record, dict) else {})
+            status_record = self.record or self.submission_records.get(self.source, {})
+            submission = status_record.get("fireworks_submission", {})
             locked = (isinstance(submission, dict)
                       and submission.get("status") in LOCKED_SUBMISSION_STATUSES)
             reconcilable = (isinstance(submission, dict)
@@ -1723,7 +1770,7 @@ def main(argv=None) -> int:
             self.reconcile_fireworks_button.setEnabled(
                 idle and ledger_ready and reconcilable)
             self.mark_submitted_button.setEnabled(
-                idle and ledger_ready and self.record is not None and not locked)
+                idle and ledger_ready and self.source is not None and not locked)
             self.save_formatted_request_button.setEnabled(
                 idle and self.record is not None and not locked)
             self.regenerate_formatted_request_button.setEnabled(
@@ -2073,12 +2120,11 @@ def main(argv=None) -> int:
         def mark_already_submitted(self, source):
             if self.busy or self.fireworks_future is not None:
                 return False
-            record = self.records.get(source)
-            if not isinstance(record, dict):
-                QtWidgets.QMessageBox.information(
-                    self, "No record available", "Process this PDF before marking it submitted.")
+            if source not in self.sources:
                 return False
+            record = None
             try:
+                record = self.status_record_for_source(source)
                 fireworks_submissions.reconcile_record(record)
                 submission = record.get("fireworks_submission", {})
                 if (isinstance(submission, dict)
@@ -2122,7 +2168,7 @@ def main(argv=None) -> int:
                 text = activity_id_input.text().strip()
                 if text and (not text.isascii() or not text.isdecimal() or int(text) <= 0):
                     raise ValueError("Activity ID must be a positive integer, or leave it blank")
-                if source == self.source:
+                if source == self.source and self.record is not None:
                     # Preserve a pending visible edit, including an invalid JSON draft;
                     # an external submission does not require a valid local payload.
                     self.save_formatted_request()
@@ -2130,17 +2176,23 @@ def main(argv=None) -> int:
                     record=record, activity_id=int(text) if text else None)
                 # The durable ledger comes first. If a later local save fails, it still
                 # protects the PDF and the usual reconciliation restores its banner.
-                automatic_export(record, args.export_dir)
+                if source in self.records:
+                    automatic_export(record, args.export_dir)
                 self.persist_state(raise_errors=True)
                 if source == self.source:
-                    self.display_record(record)
+                    if self.record is not None:
+                        self.display_record(record)
+                    else:
+                        self.show_current()
+                self.update_navigation()
                 self.status.setText(
                     f"Marked PDF {self.sources.index(source) + 1} already submitted — "
                     "local confirmation only; no Fireworks request sent")
                 return True
             except (OSError, ValueError, DuplicateSubmissionError) as exc:
-                if source == self.source:
+                if source == self.source and self.record is not None and record is not None:
                     self.display_record(record)
+                self.update_navigation()
                 QtWidgets.QMessageBox.critical(
                     self, "Unable to save submitted confirmation",
                     str(exc) + "\n\nNo request was sent to Fireworks. "
@@ -2149,10 +2201,11 @@ def main(argv=None) -> int:
                 return False
 
         def reconcile_fireworks_attempt(self):
-            if self.record is None or self.fireworks_future is not None or self.busy:
+            if self.source is None or self.fireworks_future is not None or self.busy:
                 return
             try:
-                entry = fireworks_ledger.effective_entry(self.record)
+                record = self.status_record_for_source(self.source)
+                entry = fireworks_ledger.effective_entry(record)
             except (OSError, ValueError) as exc:
                 QtWidgets.QMessageBox.critical(
                     self, "Unable to read submission ledger", str(exc))
@@ -2205,11 +2258,15 @@ def main(argv=None) -> int:
 
             try:
                 result = fireworks_submissions.manual_reconcile(
-                    record=self.record, created=created,
+                    record=record, created=created,
                     activity_id=activity_id)
-                automatic_export(self.record, args.export_dir)
+                if self.source in self.records:
+                    automatic_export(record, args.export_dir)
                 self.persist_state()
-                self.display_record(self.record)
+                if self.record is not None:
+                    self.display_record(record)
+                else:
+                    self.show_current()
             except (OSError, ValueError) as exc:
                 QtWidgets.QMessageBox.critical(
                     self, "Unable to reconcile attempt", str(exc))

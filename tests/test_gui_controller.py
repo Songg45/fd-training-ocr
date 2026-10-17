@@ -230,6 +230,16 @@ class GuiControllerTests(unittest.TestCase):
         self.assertEqual(unprocessed_sources(sources, {}, {source: True for source in sources}), ())
         self.assertEqual(unprocessed_sources([], records, reviews), ())
 
+    def test_batch_selection_skips_unprocessed_pdfs_with_existing_submission_receipts(self):
+        sources = [Path(f"{number}.pdf") for number in range(3)]
+        submissions = {
+            sources[0]: {"source_sha256": "a" * 64,
+                         "fireworks_submission": {"status": "submitted"}},
+            sources[1]: {"source_sha256": "b" * 64},
+        }
+        self.assertEqual(unprocessed_sources(sources, {}, {sources[0]: False}, submissions),
+                         (sources[1], sources[2]))
+
     def test_display_value_uses_review_resolution_order(self):
         self.assertEqual(display_value({"raw":"a", "normalized":"b", "resolved_value":"c", "reviewed_value":"d"}), "d")
         self.assertEqual(display_value({"raw":"a", "normalized":"b", "resolved_value":None}), "b")

@@ -13,6 +13,7 @@ import unittest
 from unittest.mock import patch
 
 from fd_training_ocr import gui
+from fd_training_ocr.export import source_sha256
 from fd_training_ocr.config import AppConfig
 from fd_training_ocr.fireworks_client import (DuplicateSubmissionError, FireworksClient,
                                                LOCKED_SUBMISSION_STATUSES,
@@ -42,18 +43,22 @@ class StatusDialogTests(unittest.TestCase):
         window = next(node for node in main.body
                       if isinstance(node, ast.ClassDef) and node.name == "Window")
         methods = [node for node in window.body if isinstance(node, ast.FunctionDef)
-                   and node.name in {"show_process_status", "mark_already_submitted"}]
+                   and node.name in {"show_process_status", "mark_already_submitted",
+                                     "status_record_for_source", "pending_batch_sources"}]
         namespace = dict(QtCore=QtCore, QtWidgets=QtWidgets, datetime=datetime,
                          process_status_rows=process_status_rows,
                          queue_index_for_page=queue_index_for_page,
                          LOCKED_SUBMISSION_STATUSES=LOCKED_SUBMISSION_STATUSES,
                          DuplicateSubmissionError=DuplicateSubmissionError,
-                         automatic_export=automatic_export)
+                         automatic_export=automatic_export, source_sha256=source_sha256,
+                         unprocessed_sources=unprocessed_sources)
         exec(compile(ast.Module(body=methods, type_ignores=[]), gui.__file__, "exec"), namespace)
 
         class Host(QtWidgets.QMainWindow):
             show_process_status = namespace["show_process_status"]
             mark_already_submitted = namespace["mark_already_submitted"]
+            status_record_for_source = namespace["status_record_for_source"]
+            pending_batch_sources = namespace["pending_batch_sources"]
 
             def __init__(self, root):
                 super().__init__()
@@ -77,6 +82,7 @@ class StatusDialogTests(unittest.TestCase):
                 namespace["fireworks_submissions"] = SubmissionCoordinator(self.ledger)
                 namespace["args"] = SimpleNamespace(export_dir=root / "exports")
                 self.human_reviews = {}
+                self.submission_records = {}
                 self.navigated = None
                 self.save_failure = False
 
@@ -312,7 +318,7 @@ class StatusDialogTests(unittest.TestCase):
             host.close()
 
     @staticmethod
-    def full_window(root):
+    def full_window(root, *, preview_image=None):
         namespace = dict(vars(gui))
         ledger = SubmissionLedger(root / "submissions.jsonl")
         namespace.update(
@@ -321,12 +327,141 @@ class StatusDialogTests(unittest.TestCase):
                                  queues_dir=root / "queues"),
             config=AppConfig(), fireworks_mappings=None,
             fireworks_ledger=ledger, fireworks_submissions=SubmissionCoordinator(ledger))
+        if preview_image is not None:
+            namespace["paths"] = SimpleNamespace(pdftoppm=None)
+            namespace["render_pdf"] = lambda *_args, **_kwargs: [SimpleNamespace(path=preview_image)]
         tree = ast.parse(Path(gui.__file__).read_text(encoding="utf-8"))
         main = next(node for node in tree.body
                     if isinstance(node, ast.FunctionDef) and node.name == "main")
         classes = [node for node in main.body if isinstance(node, ast.ClassDef)]
         exec(compile(ast.Module(body=classes, type_ignores=[]), gui.__file__, "exec"), namespace)
         return namespace["Window"](), ledger
+
+    def test_unprocessed_pdf_can_be_marked_from_status_without_ocr_and_restores_after_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            preview = root / "preview.png"
+            image = QtGui.QImage(40, 50, QtGui.QImage.Format.Format_RGB32)
+            image.fill(QtCore.Qt.GlobalColor.white)
+            self.assertTrue(image.save(str(preview)))
+            window, ledger = self.full_window(root, preview_image=preview)
+            sources = [root / f"unprocessed-{number}.pdf" for number in range(3)]
+            for source in sources:
+                source.write_bytes(f"%PDF {source.name}".encode())
+            window.sources, window.current_index = sources, 1
+            window.saved_queue_path = root / "2026.json"
+            window.human_reviews[sources[1]] = False
+            window.show_current()
+            self.assertIsNone(window.record)
+            self.assertTrue(window.mark_submitted_button.isEnabled())
+
+            def mark(dialog, table):
+                table.sortItems(1, QtCore.Qt.SortOrder.DescendingOrder)
+                row, _ = self.review_cell(table, 2)
+                table.selectRow(row)
+                button = next(button for button in dialog.findChildren(QtWidgets.QPushButton)
+                              if button.text() == "Mark Already Submitted…")
+                self.assertTrue(button.isEnabled())
+                failures = self.schedule_mark_decision("4321")
+                button.click()
+                self.assertFalse(failures)
+                row, combo = self.review_cell(table, 2)
+                self.assertEqual(table.item(row, 2).text(), "True")
+                self.assertIs(combo.currentData(), False)
+                self.assertFalse(button.isEnabled())
+
+            with patch.object(gui, "process_pdf", side_effect=AssertionError("OCR must not run")):
+                with patch.object(FireworksClient, "post_activity") as post:
+                    self.use_dialog(window, mark)
+                    post.assert_not_called()
+            self.assertEqual(window.records, {})
+            self.assertIsNone(window.record)
+            self.assertFalse((root / "exports").exists())
+            self.assertEqual(window.warning.text(), "Submitted to Fireworks — Activity ID: 4321")
+            self.assertIn("OCR not run", window.formatted_request_warning.text())
+            self.assertFalse(window.mark_submitted_button.isEnabled())
+            self.assertEqual(window.pending_batch_sources(), (sources[0], sources[2]))
+            self.assertEqual(ledger.entries()[0]["source_sha256"], source_sha256(sources[1]))
+            self.assertEqual(load_gui_state(root / "2026.json")[2], {})
+            self.assertNotIn("fields", window.submission_records[sources[1]])
+            window.close()
+
+            restored, _ledger = self.full_window(root, preview_image=preview)
+            self.assertEqual(restored.sources, sources)
+            self.assertEqual(restored.records, {})
+            self.assertIsNone(restored.record)
+            self.assertEqual(restored.warning.text(), "Submitted to Fireworks — Activity ID: 4321")
+            self.assertEqual(restored.pending_batch_sources(), (sources[0], sources[2]))
+            self.assertIs(restored.human_reviews[sources[1]], False)
+            with patch.object(restored, "process_next_batch_item") as next_item:
+                restored.process_all()
+                next_item.assert_called_once()
+                self.assertEqual(restored.batch_queue, [sources[0], sources[2]])
+            restored.batch_queue, restored.batch_total = [], 0
+            restored.set_busy(False)
+            restored.new_queue()
+            self.assertEqual(restored.sources, [])
+            self.assertEqual(restored.submission_records, {})
+            state = load_gui_state(root / "2026.json", require_all_sources=True)
+            restored.replace_queue(
+                *state, root / "2026.json",
+                human_reviews=load_human_reviews(root / "2026.json", state[0]))
+            self.assertEqual(restored.records, {})
+            self.assertEqual(restored.warning.text(), "Submitted to Fireworks — Activity ID: 4321")
+            self.assertEqual(restored.pending_batch_sources(), (sources[0], sources[2]))
+
+            replacement = root / "rescan.pdf"
+            replacement.write_bytes(b"%PDF different replacement scan")
+            with patch.object(QtWidgets.QFileDialog, "getOpenFileName",
+                              return_value=(str(replacement), "PDF files (*.pdf)")):
+                restored.replace_current_pdf()
+            self.assertEqual(restored.sources, [sources[0], replacement, sources[2]])
+            self.assertEqual(restored.records, {})
+            self.assertEqual(restored.pending_batch_sources(), tuple(restored.sources))
+            self.assertFalse(restored.warning.text().startswith("Submitted to Fireworks"))
+            self.assertTrue(restored.mark_submitted_button.isEnabled())
+            self.assertEqual(len(ledger.entries()), 1)
+            restored.close()
+
+    def test_uncertain_attempt_can_still_be_reconciled_without_ocr(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            preview = root / "preview.png"
+            image = QtGui.QImage(20, 20, QtGui.QImage.Format.Format_RGB32)
+            image.fill(QtCore.Qt.GlobalColor.white)
+            self.assertTrue(image.save(str(preview)))
+            window, ledger = self.full_window(root, preview_image=preview)
+            source = root / "uncertain.pdf"
+            source.write_bytes(b"%PDF uncertain source")
+            identity = {"source_file": source.name, "source_sha256": source_sha256(source), "page": 1}
+            ledger.append(record=identity, payload={"assignTitle": "Original attempted payload"},
+                          status="unknown", attempt_id="prior-attempt", error="connection lost")
+            window.sources, window.current_index = [source], 0
+            window.show_current()
+            self.assertTrue(window.reconcile_fireworks_button.isEnabled())
+            self.assertFalse(window.mark_submitted_button.isEnabled())
+            failures = []
+
+            def found():
+                dialog = self.app.activeModalWidget()
+                try:
+                    next(button for button in dialog.buttons()
+                         if button.text() == "Found — Mark Submitted").click()
+                except BaseException as exc:
+                    failures.append(exc)
+                    dialog.reject()
+
+            QtCore.QTimer.singleShot(0, found)
+            with patch.object(QtWidgets.QInputDialog, "getInt", return_value=(94, True)):
+                with patch.object(QtWidgets.QMessageBox, "information"):
+                    window.reconcile_fireworks_attempt()
+            self.assertFalse(failures)
+            self.assertEqual(window.records, {})
+            self.assertEqual(window.warning.text(), "Submitted to Fireworks — Activity ID: 94")
+            self.assertEqual(ledger.entries()[-1]["attempt_id"], "prior-attempt")
+            self.assertEqual(window.pending_batch_sources(), ())
+            self.assertFalse((root / "exports").exists())
+            window.close()
 
     def test_process_all_excludes_reviewed_pdfs_and_selected_remains_an_override(self):
         with tempfile.TemporaryDirectory() as directory:

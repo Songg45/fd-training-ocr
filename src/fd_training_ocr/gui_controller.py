@@ -92,11 +92,14 @@ def queue_index_for_page(page_number: int, queue_count: int) -> int:
 
 def unprocessed_sources(sources: list[Path] | tuple[Path, ...],
                         records: Mapping[Path, Any],
-                        human_reviews: Mapping[Path, bool] | None = None) -> tuple[Path, ...]:
+                        human_reviews: Mapping[Path, bool] | None = None,
+                        submission_records: Mapping[Path, Any] | None = None) -> tuple[Path, ...]:
     """Return queued PDFs needing batch OCR, excluding completed human reviews."""
     reviews = human_reviews or {}
+    submissions = submission_records or {}
     return tuple(source for source in sources
-                 if source not in records and reviews.get(source) is not True)
+                 if source not in records and reviews.get(source) is not True
+                 and not record_is_submitted(submissions.get(source, {})))
 
 
 @dataclass(frozen=True)

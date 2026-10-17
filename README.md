@@ -148,16 +148,18 @@ precedence over that default, including an explicit `False` on a submitted PDF. 
 is a local tracking flag, not a change to submission status, the green banner, or the
 Fireworks request. It stays with the PDF when sorting or renumbering and survives restarts
 and named-queue switches. **Process All** skips PDFs marked Human Review `True`, including
-PDFs that have never been OCR-processed. As before, it also skips every PDF with an existing
-OCR result. Only unprocessed PDFs with Human Review blank or `False` enter the batch.
+PDFs that have never been OCR-processed. It also skips PDFs with an existing submission
+receipt, even if Human Review is explicitly `False`. As before, it skips every PDF with an
+existing OCR result. Only unprocessed, unsubmitted PDFs with Human Review blank or `False`
+enter the batch.
 Setting Human Review to `False` does not force an existing OCR result to be reprocessed;
 use **Process Selected** for an intentional re-run, including a Human Review `True` PDF.
 Review selections do not create fake OCR results. Replacing a PDF clears the old PDF's
 Human Review choice for that slot.
 
 If a training record is already in Fireworks but the program has no receipt for it, select
-its processed PDF in **Process > Status** and click **Mark Already Submitted…**. The same
-button is available in **Formatted Request** for the current PDF. Check the existing
+its PDF in **Process > Status** and click **Mark Already Submitted…**. OCR is not required.
+The same button is available in **Formatted Request** for the current PDF. Check the existing
 activity in Fireworks, optionally enter its positive activity ID (not its PDF number),
 check the confirmation box, and choose **Mark Submitted**. No bearer token, API lookup,
 POST, or valid upload payload is required. This writes a timestamped, human-confirmed
@@ -167,7 +169,11 @@ and further uploads of that PDF are blocked even after restarting or reprocessin
 Human Review follows its usual submitted default unless you already chose a value.
 This does not verify, approve, lock, or close an activity on the server. Already-submitted
 records cannot be marked again; use **Reconcile Attempt** for uncertain (`attempting` or
-`unknown`) attempts instead. Source PDFs and earlier receipts are not modified.
+`unknown`) attempts instead. Source PDFs and earlier receipts are not modified. For an
+unprocessed PDF, the app reads its file hash and page number to associate the local receipt;
+it does not run OCR, create an OCR result, or write a fabricated OCR export. Date of Class
+stays blank until a real OCR result or reviewed date exists. The green banner and Status
+page restore from the receipt ledger after a restart or switching saved queues.
 
 Use the **Queue** menu to keep separate years or projects without rebuilding their PDF
 order. **Save Queue As…** names the current queue (for example, `2025.json`), **New Queue**
