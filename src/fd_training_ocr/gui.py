@@ -803,6 +803,8 @@ def main(argv=None) -> int:
                 QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
             table.setSelectionBehavior(
                 QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+            table.setSelectionMode(
+                QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
             table.setAlternatingRowColors(True)
 
             class StatusItem(QtWidgets.QTableWidgetItem):
@@ -829,6 +831,7 @@ def main(argv=None) -> int:
                         item.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
                     if column == 1:
                         item.setToolTip(str(self.sources[row.pdf_number - 1]))
+                        item.setData(QtCore.Qt.ItemDataRole.UserRole, row.pdf_number)
                     table.setItem(row_number, column, item)
             table.horizontalHeader().setSectionResizeMode(
                 0, QtWidgets.QHeaderView.ResizeMode.Stretch)
@@ -844,15 +847,42 @@ def main(argv=None) -> int:
             explanation = QtWidgets.QLabel(
                 "PDF Number matches the number at the top of the main window. "
                 "Click Submitted? to group by status, or PDF Number to restore queue order. "
+                "Select a row and choose Go To PDF to open that document. "
                 "Submitted is True exactly when that PDF displays the "
                 "green Submitted to Fireworks banner.")
             explanation.setWordWrap(True)
             layout.addWidget(explanation)
             buttons = QtWidgets.QDialogButtonBox(
                 QtWidgets.QDialogButtonBox.StandardButton.Close)
+            go_to_button = buttons.addButton(
+                "Go To PDF", QtWidgets.QDialogButtonBox.ButtonRole.ActionRole)
+            go_to_button.setAccessibleName("Go To PDF")
+            go_to_button.setDefault(True)
+            go_to_button.setEnabled(False)
+            target_index = None
+
+            def go_to_selected():
+                nonlocal target_index
+                selected = table.selectionModel().selectedRows(1)
+                if not selected:
+                    return
+                pdf_number = table.item(selected[0].row(), 1).data(
+                    QtCore.Qt.ItemDataRole.UserRole)
+                target_index = queue_index_for_page(pdf_number, len(self.sources))
+                dialog.accept()
+
+            table.itemSelectionChanged.connect(
+                lambda: go_to_button.setEnabled(
+                    bool(table.selectionModel().selectedRows(1))))
+            go_to_button.clicked.connect(go_to_selected)
+            table.cellDoubleClicked.connect(lambda *_args: go_to_selected())
+            if 0 <= self.current_index < len(rows):
+                table.setCurrentCell(self.current_index, 1)
             buttons.rejected.connect(dialog.reject)
             layout.addWidget(buttons)
             dialog.exec()
+            if target_index is not None:
+                self.navigate_to(target_index)
 
         def load_pdfs(self):
             names, _ = QtWidgets.QFileDialog.getOpenFileNames(self, "Add training forms", "", "PDF files (*.pdf)")

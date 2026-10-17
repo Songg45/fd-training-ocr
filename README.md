@@ -123,9 +123,12 @@ main window and used by Go To. Rows open in queue order, with the date and submi
 state read directly from each queued PDF's own record. Click **Submitted?** to group by
 submission status; click it again to reverse the order. Click **PDF Number** to return to
 queue order. Sorting keeps each PDF's number, date, and status together. Hover over its
-number to see the source filename. Each record is reconciled through the same submission
-path used when that PDF is displayed. A row says `True` exactly when the PDF displays the green **Submitted to
-Fireworks** banner; records without that banner remain `False`. Adding or removing PDFs
+number to see the source filename. Select a row and click **Go To PDF**, or double-click
+the row, to close Status and open that PDF in the main window. Navigation uses the PDF's
+queue number even when the Status table is sorted. Each record is reconciled through the
+same submission path used when that PDF is displayed. A row says `True` exactly when the
+PDF displays the green **Submitted to Fireworks** banner; records without that banner
+remain `False`. Adding or removing PDFs
 updates the numbering in both navigation and Status.
 
 Use the **Queue** menu to keep separate years or projects without rebuilding their PDF
