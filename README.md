@@ -117,11 +117,14 @@ the payload behind the reviewer's back. Invalid JSON is retained as a recoverabl
 **Regenerate from Structured Results** deliberately discards manual request edits. Results are
 automatically written to the configured export folder after processing, after edits, when
 moving with Previous/Next, and when closing the GUI; no separate export action is required.
-Use **Process > Status** to open a sortable, read-only summary with the class date, source
-PDF filename, and submission state for queued and exported records. Before building the report,
-each record is reconciled through the same submission path used when that PDF is displayed. A
-row says `True` exactly when the corresponding PDF displays the green **Submitted to Fireworks**
-banner; records without that banner remain `False`.
+Use **Process > Status** to see **Date of Class | PDF Number | Submitted?** for the PDFs
+currently loaded in the GUI. PDF Number is the one-based position shown at the top of the
+main window and used by Go To. Rows stay in that queue order, with the date and submission
+state read directly from each queued PDF's own record. Hover over its number to see the
+source filename. Each record is reconciled through the same submission path used when that
+PDF is displayed. A row says `True` exactly when the PDF displays the green **Submitted to
+Fireworks** banner; records without that banner remain `False`. Adding or removing PDFs
+updates the numbering in both navigation and Status.
 At startup the GUI snapshots exported JSON, roster, queue state, and configuration into an
 immutable dated and timed folder such as
 `C:\Temp\FDTrainingOCR-Backups\08-22-2026\19-42-10`. Every launch creates a recovery point;

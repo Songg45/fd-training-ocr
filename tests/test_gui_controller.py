@@ -16,7 +16,6 @@ from fd_training_ocr.gui_controller import (GuiPaths, accept_stage3_suggestion, 
                                              build_processor, display_value, effective_event_selection,
                                              effective_facilities,
                                              discover_pdfs, export_record, index_after_removal,
-                                             load_exported_status_records,
                                              process_status_rows, ProcessStatusRow,
                                              structured_rows,
                                              queue_index_for_page,
@@ -33,67 +32,68 @@ from fd_training_ocr.gui_controller import (GuiPaths, accept_stage3_suggestion, 
 
 
 class GuiControllerTests(unittest.TestCase):
-    def test_process_status_combines_queue_records_exports_and_ledger(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            queued = root / "queued.pdf"
-            unprocessed = root / "unprocessed.pdf"
-            queued.write_bytes(b"queued")
-            unprocessed.write_bytes(b"unprocessed")
-            record = {
-                "source_file": "queued.pdf", "source_sha256": "queued-sha",
-                "page": 1,
-                "fields": {"date": {"reviewed_value": "8/4/26"}},
+    def test_process_status_matches_navigation_order_instead_of_dates_or_filenames(self):
+        first = Path("Scan (9).pdf")
+        second = Path("Scan (1).pdf")
+        third = Path("unprocessed.pdf")
+        removed = Path("removed.pdf")
+        records = {
+            second: {
+                "fields": {"date": {"normalized": "01/01/26"}},
+                "fireworks_submission": {"status": "rejected"},
+            },
+            removed: {"fireworks_submission": {"status": "submitted"}},
+            first: {
+                "fields": {"date": {"reviewed_value": "12/17/25"}},
                 "fireworks_submission": {"status": "submitted"},
-            }
-            self.assertEqual(
-                process_status_rows((queued, unprocessed), (record,)),
-                (
-                    ProcessStatusRow("08/04/26", "queued.pdf", True),
-                    ProcessStatusRow("", "unprocessed.pdf", False),
-                ),
-            )
-
-    def test_process_status_exactly_uses_record_green_banner_state(self):
-        record = {
-            "source_file": "local-only.pdf", "source_sha256": "local-sha",
-            "page": 1, "fields": {"date": {"normalized": "09/19/26"}},
-            "fireworks_submission": {"status": "submitted"},
+            },
         }
 
         self.assertEqual(
-            process_status_rows((), (record,)),
-            (ProcessStatusRow("09/19/26", "local-only.pdf", True),),
-        )
-
-    def test_process_status_non_submitted_record_is_false(self):
-        records = (
-            {
-                "source_file": "2.pdf", "source_sha256": "hash-for-2",
-                "page": 1, "fields": {"date": {"normalized": "08/02/26"}},
-                "fireworks_submission": {"status": "rejected"},
-            },
-            {
-                "source_file": "3.pdf", "source_sha256": "hash-for-3",
-                "page": 1, "fields": {"date": {"normalized": "08/03/26"}},
-                "fireworks_submission": {"status": "submitted"},
-            },
-        )
-
-        self.assertEqual(
-            process_status_rows((), records),
+            process_status_rows((second, first, third), records),
             (
-                ProcessStatusRow("08/02/26", "2.pdf", False),
-                ProcessStatusRow("08/03/26", "3.pdf", True),
+                ProcessStatusRow("01/01/26", 1, False),
+                ProcessStatusRow("12/17/25", 2, True),
+                ProcessStatusRow("", 3, False),
             ),
         )
 
-    def test_load_exported_status_records_rejects_corrupt_json(self):
-        with tempfile.TemporaryDirectory() as directory:
-            export_dir = Path(directory)
-            (export_dir / "bad.json").write_text("{bad", encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "bad.json"):
-                load_exported_status_records(export_dir)
+    def test_process_status_keeps_same_filename_and_hash_pdfs_in_separate_queue_rows(self):
+        first = Path("folder-a/form.pdf")
+        second = Path("folder-b/form.pdf")
+        records = {
+            first: {
+                "source_file": "form.pdf", "source_sha256": "same-hash",
+                "fields": {"date": {"normalized": "08/02/26"}},
+                "fireworks_submission": {"status": "submitted"},
+            },
+            second: {
+                "source_file": "form.pdf", "source_sha256": "same-hash",
+                "fields": {"date": {"normalized": "08/03/26"}},
+                "fireworks_submission": {"status": "unknown"},
+            },
+        }
+
+        self.assertEqual(
+            process_status_rows((first, second), records),
+            (
+                ProcessStatusRow("08/02/26", 1, True),
+                ProcessStatusRow("08/03/26", 2, False),
+            ),
+        )
+
+    def test_process_status_renumbers_remaining_pdfs_after_queue_removal(self):
+        first, second = Path("first.pdf"), Path("second.pdf")
+        records = {
+            first: {"fireworks_submission": {"status": "rejected"}},
+            second: {"fireworks_submission": {"status": "submitted"}},
+        }
+
+        self.assertEqual(
+            process_status_rows((second,), records),
+            (ProcessStatusRow("", 1, True),),
+        )
+        self.assertEqual(process_status_rows((), records), ())
 
     def test_add_attendee_roster_linking_is_bidirectional_and_preserves_unknowns(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -19,7 +19,7 @@ from .gui_controller import (EVENT_SELECTIONS, GuiPaths, accept_stage3_suggestio
                              populate_unit_from_roster_name,
                              automatic_export, build_processor, effective_event_selection,
                              create_startup_backup,
-                             load_exported_status_records, load_gui_state,
+                             load_gui_state,
                              process_pdf, process_status_rows,
                              record_is_submitted, save_gui_state,
                              discover_pdfs, display_value, index_after_removal, structured_rows,
@@ -612,13 +612,9 @@ def main(argv=None) -> int:
         def show_process_status(self):
             """Show the same submitted state used by each PDF's green banner."""
             try:
-                exported = load_exported_status_records(args.export_dir)
-                in_memory = tuple(
-                    record for record in self.records.values()
-                    if isinstance(record, dict))
-                records = (*exported, *in_memory)
                 reconciled_any = False
-                for record in records:
+                for source in self.sources:
+                    record = self.records.get(source)
                     if not isinstance(record, dict):
                         continue
                     reconciled, _entry = fireworks_submissions.reconcile_record(record)
@@ -627,7 +623,7 @@ def main(argv=None) -> int:
                         reconciled_any = True
                 if reconciled_any:
                     self.persist_state()
-                rows = process_status_rows(self.sources, records)
+                rows = process_status_rows(self.sources, self.records)
             except (OSError, ValueError) as exc:
                 QtWidgets.QMessageBox.critical(
                     self, "Unable to build process status", str(exc))
@@ -647,34 +643,39 @@ def main(argv=None) -> int:
 
             table = QtWidgets.QTableWidget(len(rows), 3)
             table.setHorizontalHeaderLabels(
-                ["Date of Class", "PDF ID", "Submitted?"])
+                ["Date of Class", "PDF Number", "Submitted?"])
             table.setAccessibleName("PDF process status")
             table.setAccessibleDescription(
-                "Date of class, PDF identifier, and durable submission status")
+                "Date of class, PDF number matching main-window navigation, "
+                "and submission status")
+            table.verticalHeader().setVisible(False)
+            table.setSortingEnabled(False)
             table.setEditTriggers(
                 QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
             table.setSelectionBehavior(
                 QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
             table.setAlternatingRowColors(True)
             for row_number, row in enumerate(rows):
-                values = (row.date_of_class, row.pdf_id,
+                values = (row.date_of_class, str(row.pdf_number),
                           "True" if row.submitted else "False")
                 for column, value in enumerate(values):
                     item = QtWidgets.QTableWidgetItem(value)
-                    if column == 2:
+                    if column in (1, 2):
                         item.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+                    if column == 1:
+                        item.setToolTip(str(self.sources[row.pdf_number - 1]))
                     table.setItem(row_number, column, item)
             table.horizontalHeader().setSectionResizeMode(
-                0, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+                0, QtWidgets.QHeaderView.ResizeMode.Stretch)
             table.horizontalHeader().setSectionResizeMode(
-                1, QtWidgets.QHeaderView.ResizeMode.Stretch)
+                1, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
             table.horizontalHeader().setSectionResizeMode(
                 2, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
-            table.setSortingEnabled(True)
             layout.addWidget(table, 1)
 
             explanation = QtWidgets.QLabel(
-                "Submitted is True exactly when this PDF record displays the "
+                "PDF Number matches the number at the top of the main window. "
+                "Submitted is True exactly when that PDF displays the "
                 "green Submitted to Fireworks banner.")
             explanation.setWordWrap(True)
             layout.addWidget(explanation)

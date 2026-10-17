@@ -1,4 +1,5 @@
 from concurrent.futures import Future
+from pathlib import Path
 import unittest
 
 from fd_training_ocr.gui import (fireworks_resolution_warning,
@@ -9,6 +10,7 @@ from fd_training_ocr.gui import (fireworks_resolution_warning,
                                  submission_close_action)
 from fd_training_ocr.fireworks import (FireworksCategory, FireworksInstructor,
                                        FireworksLocation, FireworksMappings)
+from fd_training_ocr.gui_controller import process_status_rows
 
 
 class SubmissionCloseTests(unittest.TestCase):
@@ -50,6 +52,26 @@ class FireworksResponsePopupTests(unittest.TestCase):
 
 
 class RecordBannerTests(unittest.TestCase):
+    def test_status_row_matches_green_banner_for_each_queue_record(self):
+        sources = [Path(f"form-{index}.pdf") for index in range(7)]
+        states = ("submitted", "rejected", "unknown", "attempting",
+                  "reconciled_not_submitted", None)
+        records = {
+            source: {
+                "status": "review_required",
+                "fireworks_submission": {"status": state},
+            }
+            for source, state in zip(sources, states)
+        }
+        rows = process_status_rows(sources, records)
+
+        for number, (source, row) in enumerate(zip(sources, rows), start=1):
+            with self.subTest(pdf_number=number):
+                banner_text, _color = record_banner_state(records.get(source, {}))
+                self.assertEqual(row.pdf_number, number)
+                self.assertEqual(
+                    row.submitted, banner_text.startswith("Submitted to Fireworks"))
+
     def test_submitted_record_uses_green_banner_even_if_review_warnings_remain(self):
         record = {
             "status": "review_required",
