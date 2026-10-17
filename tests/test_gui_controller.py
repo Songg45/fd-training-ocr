@@ -80,6 +80,36 @@ class GuiControllerTests(unittest.TestCase):
             ),
         )
 
+    def test_process_status_attaches_submission_to_pdf_id_not_crossed_hash(self):
+        records = (
+            {
+                "source_file": "2.pdf", "source_sha256": "hash-for-3",
+                "page": 1, "fields": {"date": {"normalized": "08/02/26"}},
+            },
+            {
+                "source_file": "3.pdf", "source_sha256": "hash-for-2",
+                "page": 1, "fields": {"date": {"normalized": "08/03/26"}},
+            },
+        )
+        ledger = (
+            {
+                "source_file": "2.pdf", "source_sha256": "hash-for-2",
+                "page": 1, "status": "submitted",
+            },
+            {
+                "source_file": "3.pdf", "source_sha256": "hash-for-3",
+                "page": 1, "status": "rejected",
+            },
+        )
+
+        self.assertEqual(
+            process_status_rows((), records, ledger),
+            (
+                ProcessStatusRow("08/02/26", "2.pdf", True),
+                ProcessStatusRow("08/03/26", "3.pdf", False),
+            ),
+        )
+
     def test_load_exported_status_records_rejects_corrupt_json(self):
         with tempfile.TemporaryDirectory() as directory:
             export_dir = Path(directory)

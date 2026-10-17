@@ -114,12 +114,12 @@ def load_exported_status_records(directory: Path) -> tuple[Mapping[str, Any], ..
 
 def _status_identity(item: Mapping[str, Any]) -> tuple[str, str, str] | None:
     page = str(item.get("page") if item.get("page") is not None else "")
-    digest = str(item.get("source_sha256") or "").strip()
-    if digest:
-        return "sha256", digest, page
     source_file = str(item.get("source_file") or "").strip()
     if source_file:
         return "file", Path(source_file).name.casefold(), page
+    digest = str(item.get("source_sha256") or "").strip()
+    if digest:
+        return "sha256", digest, page
     return None
 
 

@@ -120,7 +120,9 @@ moving with Previous/Next, and when closing the GUI; no separate export action i
 Use **Process > Status** to open a sortable, read-only summary with the class date, source
 PDF filename, and submission state for queued, exported, and ledger-only records. A row says
 `True` only when the durable submission ledger's effective state is `submitted`; processed,
-rejected, attempting, and indeterminate records remain `False`.
+rejected, attempting, and indeterminate records remain `False`. Status entries are associated
+with the displayed source PDF filename and page; the source hash is used only when a ledger
+or export entry has no filename.
 At startup the GUI snapshots exported JSON, roster, queue state, and configuration into an
 immutable dated and timed folder such as
 `C:\Temp\FDTrainingOCR-Backups\08-22-2026\19-42-10`. Every launch creates a recovery point;
