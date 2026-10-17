@@ -121,8 +121,9 @@ Use **Process > Status** to open a sortable, read-only summary with the class da
 PDF filename, and submission state for queued, exported, and ledger-only records. A row says
 `True` only when the durable submission ledger's effective state is `submitted`; processed,
 rejected, attempting, and indeterminate records remain `False`. Status entries are associated
-with the displayed source PDF filename and page; the source hash is used only when a ledger
-or export entry has no filename.
+with the stable source hash and page, falling back to the displayed PDF filename only when a
+hash is unavailable. Opening the report durably reconciles historical `rejected` entries only
+when their preserved Fireworks response explicitly affirms that the activity was created.
 At startup the GUI snapshots exported JSON, roster, queue state, and configuration into an
 immutable dated and timed folder such as
 `C:\Temp\FDTrainingOCR-Backups\08-22-2026\19-42-10`. Every launch creates a recovery point;

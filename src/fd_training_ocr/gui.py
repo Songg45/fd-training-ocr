@@ -612,6 +612,7 @@ def main(argv=None) -> int:
         def show_process_status(self):
             """Show queued and exported PDFs with their durable submission status."""
             try:
+                repaired_receipts = fireworks_ledger.reconcile_explicit_successes()
                 exported = load_exported_status_records(args.export_dir)
                 in_memory = tuple(
                     record for record in self.records.values()
@@ -632,7 +633,10 @@ def main(argv=None) -> int:
             summary = QtWidgets.QLabel(
                 f"{len(rows)} PDF record{'s' if len(rows) != 1 else ''} — "
                 f"{submitted_count} submitted — "
-                f"{len(rows) - submitted_count} not submitted")
+                f"{len(rows) - submitted_count} not submitted"
+                + (f" — {repaired_receipts} historical creation receipt"
+                   f"{'s' if repaired_receipts != 1 else ''} reconciled"
+                   if repaired_receipts else ""))
             summary.setAccessibleName("Process status summary")
             layout.addWidget(summary)
 

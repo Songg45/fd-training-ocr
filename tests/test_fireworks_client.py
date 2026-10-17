@@ -319,6 +319,39 @@ class SubmissionLedgerTests(unittest.TestCase):
             self.assertEqual(entry["response_body_sha256"], "d" * 64)
             self.assertTrue(entry["endpoint"].endswith("/TrnCommon/addActivity"))
 
+    def test_status_reconciliation_repairs_only_explicit_creation_receipts(self):
+        with TemporaryDirectory() as name:
+            ledger = SubmissionLedger(Path(name) / "submissions.jsonl")
+            payload = self.activity_payload()
+            created_record = self.record()
+            rejected_record = dict(
+                self.record(), source_file="rejected.pdf",
+                source_sha256="b" * 64)
+            success = {
+                "id": 94, "wishObject": {}, "rc": 1,
+                "description": "new assignment added",
+            }
+            rejection = {"rc": 1, "description": "validation failed"}
+            ledger.append(
+                record=created_record, payload=payload, status="rejected",
+                attempt_id="created-attempt", response=success,
+                response_status=200, response_text=json.dumps(success),
+                error="new assignment added")
+            ledger.append(
+                record=rejected_record, payload=dict(payload, assignTitle="Rejected"),
+                status="rejected", attempt_id="rejected-attempt",
+                response=rejection, response_status=422,
+                response_text=json.dumps(rejection), error="validation failed")
+
+            self.assertEqual(ledger.reconcile_explicit_successes(), 1)
+            states = {
+                entry["attempt_id"]: entry["status"]
+                for entry in ledger.effective_entries()
+            }
+            self.assertEqual(states["created-attempt"], "submitted")
+            self.assertEqual(states["rejected-attempt"], "rejected")
+            self.assertEqual(ledger.reconcile_explicit_successes(), 0)
+
     def test_ambiguous_or_corrupt_ledger_line_fails_closed(self):
         with TemporaryDirectory() as name:
             path = Path(name) / "submissions.jsonl"

@@ -80,7 +80,7 @@ class GuiControllerTests(unittest.TestCase):
             ),
         )
 
-    def test_process_status_attaches_submission_to_pdf_id_not_crossed_hash(self):
+    def test_process_status_uses_stable_hash_when_filenames_conflict(self):
         records = (
             {
                 "source_file": "2.pdf", "source_sha256": "hash-for-3",
@@ -105,8 +105,8 @@ class GuiControllerTests(unittest.TestCase):
         self.assertEqual(
             process_status_rows((), records, ledger),
             (
-                ProcessStatusRow("08/02/26", "2.pdf", True),
-                ProcessStatusRow("08/03/26", "3.pdf", False),
+                ProcessStatusRow("08/02/26", "2.pdf", False),
+                ProcessStatusRow("08/03/26", "3.pdf", True),
             ),
         )
 
