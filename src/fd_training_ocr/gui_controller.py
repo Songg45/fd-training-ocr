@@ -634,6 +634,7 @@ def create_startup_backup(*, backup_dir: Path, export_dir: Path,
                           roster_file: Path | None,
                           fireworks_mappings_file: Path | None = None,
                           fireworks_ledger_file: Path | None = None,
+                          queues_dir: Path | None = None,
                           keep: int = 20,
                           snapshot_at: datetime | None = None) -> Path | None:
     """Create an immutable MM-DD-YYYY/HH-MM-SS startup data snapshot."""
@@ -645,6 +646,11 @@ def create_startup_backup(*, backup_dir: Path, export_dir: Path,
     if exports.is_dir():
         sources.extend((path, Path("Exported") / path.name)
                        for path in sorted(exports.glob("*.json")) if path.is_file())
+    if queues_dir is not None:
+        queues = queues_dir.expanduser().resolve()
+        if queues.is_dir():
+            sources.extend((path, Path("Queues") / path.name)
+                           for path in sorted(queues.glob("*.json")) if path.is_file())
     candidates = ((config_file, Path("Configuration") / "config.toml"),
                   (roster_file, Path("Roster") / "roster.json"),
                   (state_file, Path("State") / "gui-state.json"),
@@ -717,7 +723,8 @@ def create_startup_backup(*, backup_dir: Path, export_dir: Path,
 
 def save_gui_state(state_file: Path, sources: list[Path] | tuple[Path, ...],
                    current_index: int, records: Mapping[Path, Any],
-                   failures: Mapping[Path, str]) -> Path:
+                   failures: Mapping[Path, str], *,
+                   saved_queue: Path | None = None) -> Path:
     """Atomically persist the desktop queue without modifying any source PDF."""
     destination = state_file.expanduser().resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -729,6 +736,7 @@ def save_gui_state(state_file: Path, sources: list[Path] | tuple[Path, ...],
                     if source in sources},
         "failures": {str(source.resolve()): str(message) for source, message in failures.items()
                      if source in sources},
+        "saved_queue": str(saved_queue.expanduser().resolve()) if saved_queue else None,
     }
     temporary = destination.with_suffix(destination.suffix + ".tmp")
     temporary.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -736,10 +744,13 @@ def save_gui_state(state_file: Path, sources: list[Path] | tuple[Path, ...],
     return destination
 
 
-def load_gui_state(state_file: Path) -> tuple[list[Path], int, dict[Path, Any], dict[Path, str]]:
-    """Restore existing PDFs from a versioned state file and ignore stale paths."""
+def load_gui_state(state_file: Path, *, require_all_sources: bool = False
+                   ) -> tuple[list[Path], int, dict[Path, Any], dict[Path, str]]:
+    """Restore queue state; strict loading preserves named queues' PDF numbering."""
     source = state_file.expanduser().resolve()
     if not source.is_file():
+        if require_all_sources:
+            raise ValueError(f"Saved queue not found: {source}")
         return [], -1, {}, {}
     payload = json.loads(source.read_text(encoding="utf-8"))
     if not isinstance(payload, Mapping) or payload.get("schema_version") != 1:
@@ -753,11 +764,17 @@ def load_gui_state(state_file: Path) -> tuple[list[Path], int, dict[Path, Any], 
         try:
             candidate = Path(str(raw_path)).expanduser().resolve()
         except (OSError, ValueError):
+            if require_all_sources:
+                raise ValueError(f"Saved queue contains an invalid PDF path: {raw_path}")
             continue
         if (candidate not in seen and candidate.is_file()
                 and candidate.suffix.casefold() == ".pdf"):
             sources.append(candidate)
             seen.add(candidate)
+        elif require_all_sources:
+            raise ValueError(
+                f"Saved queue PDF is missing, unreadable, duplicated, or not a PDF: {candidate}\n"
+                "Restore it to its original path before opening this queue so PDF numbers stay the same.")
     records_payload = payload.get("records", {})
     failures_payload = payload.get("failures", {})
     records = {}
@@ -775,6 +792,38 @@ def load_gui_state(state_file: Path) -> tuple[list[Path], int, dict[Path, Any], 
         requested_index = 0
     current_index = min(max(requested_index, 0), len(sources) - 1) if sources else -1
     return sources, current_index, records, failures
+
+
+def load_saved_queue_path(state_file: Path) -> Path | None:
+    """Read which named queue receives automatic saves for the current session."""
+    source = state_file.expanduser().resolve()
+    if not source.is_file():
+        return None
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping):
+        raise ValueError("invalid GUI state file")
+    raw_path = payload.get("saved_queue")
+    if raw_path is None:
+        return None
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        raise ValueError("invalid saved queue path")
+    queue_path = Path(raw_path).expanduser()
+    if not queue_path.is_absolute() or queue_path.resolve() == source:
+        raise ValueError("saved queue must have its own absolute file path")
+    return queue_path.resolve()
+
+
+def save_queue_session(state_file: Path, sources: list[Path] | tuple[Path, ...],
+                       current_index: int, records: Mapping[Path, Any],
+                       failures: Mapping[Path, str], *,
+                       saved_queue: Path | None = None) -> Path:
+    """Save the active named queue and the restart state using atomic replacements."""
+    if saved_queue is not None:
+        if saved_queue.expanduser().resolve() == state_file.expanduser().resolve():
+            raise ValueError("Choose a queue filename different from the automatic restart state file")
+        save_gui_state(saved_queue, sources, current_index, records, failures)
+    return save_gui_state(
+        state_file, sources, current_index, records, failures, saved_queue=saved_queue)
 
 
 def roster_table_rows(

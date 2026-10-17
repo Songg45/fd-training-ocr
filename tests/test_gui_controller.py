@@ -19,7 +19,8 @@ from fd_training_ocr.gui_controller import (GuiPaths, accept_stage3_suggestion, 
                                              process_status_rows, ProcessStatusRow,
                                              structured_rows,
                                              queue_index_for_page,
-                                             load_gui_state, save_gui_state, unprocessed_sources,
+                                             load_gui_state, load_saved_queue_path,
+                                             save_gui_state, save_queue_session, unprocessed_sources,
                                              attendee_row_from_field, remove_attendee,
                                              first_available_attendee_row,
                                              stage3_suggestion,
@@ -466,12 +467,15 @@ class GuiControllerTests(unittest.TestCase):
             fireworks_mappings.write_text('{"schema_version":1}')
             fireworks_ledger = root / "submissions.jsonl"
             fireworks_ledger.write_text('{"status":"submitted"}\n')
+            queues = root / "Queues"; queues.mkdir()
+            (queues / "2025.json").write_text('{"sources":["2025.pdf"]}')
+            (queues / "2026.json").write_text('{"sources":["2026.pdf"]}')
             result = exports / "one.json"; result.write_text('{"value":1}')
             first = create_startup_backup(
                 backup_dir=backups, export_dir=exports, state_file=state,
                 config_file=config, roster_file=roster,
                 fireworks_mappings_file=fireworks_mappings,
-                fireworks_ledger_file=fireworks_ledger, keep=2,
+                fireworks_ledger_file=fireworks_ledger, queues_dir=queues, keep=2,
                 snapshot_at=datetime(2026, 8, 20, 9, 30, 0))
             self.assertIsNotNone(first)
             self.assertEqual(first.parent.name, "08-20-2026")
@@ -480,6 +484,9 @@ class GuiControllerTests(unittest.TestCase):
             self.assertTrue((first / "Configuration" / "config.toml").is_file())
             self.assertTrue((first / "Fireworks" / "fireworks-category-ids.json").is_file())
             self.assertTrue((first / "Fireworks" / "submissions.jsonl").is_file())
+            self.assertEqual((first / "Queues" / "2025.json").read_text(),
+                             '{"sources":["2025.pdf"]}')
+            self.assertTrue((first / "Queues" / "2026.json").is_file())
             second = create_startup_backup(
                 backup_dir=backups, export_dir=exports, state_file=state,
                 config_file=config, roster_file=roster, keep=2,
@@ -521,6 +528,85 @@ class GuiControllerTests(unittest.TestCase):
             self.assertEqual(index, 0)
             self.assertEqual(records, {})
             self.assertEqual(failures, {})
+
+    def test_named_queue_restores_exact_order_reviews_submission_and_position(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first, second = root / "Scan (9).pdf", root / "Scan (1).pdf"
+            first.write_bytes(b"%PDF first")
+            second.write_bytes(b"%PDF second")
+            state, queue = root / "state.json", root / "Queues" / "2025.json"
+            record = {
+                "source_file": first.name,
+                "fields": {"date": {"reviewed_value": "12/17/25"}},
+                "fireworks_submission": {"status": "submitted", "activity_id": 94},
+                "fireworks_request_draft": {"text": "unfinished draft"},
+            }
+            save_queue_session(
+                state, [second, first], 1, {first: record}, {second: "bad scan"},
+                saved_queue=queue)
+
+            self.assertEqual(load_saved_queue_path(state), queue.resolve())
+            self.assertIsNone(load_saved_queue_path(queue))
+            sources, index, records, failures = load_gui_state(queue, require_all_sources=True)
+            self.assertEqual(sources, [second.resolve(), first.resolve()])
+            self.assertEqual(index, 1)
+            self.assertEqual(records[first.resolve()], record)
+            self.assertEqual(failures[second.resolve()], "bad scan")
+            self.assertEqual(process_status_rows(sources, records), (
+                ProcessStatusRow("", 1, False), ProcessStatusRow("12/17/25", 2, True)))
+
+    def test_starting_new_queue_preserves_old_queue_and_years_save_independently(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = root / "state.json"
+            queues = root / "Queues"
+            old, new = root / "old.pdf", root / "new.pdf"
+            old.write_bytes(b"%PDF old")
+            new.write_bytes(b"%PDF new")
+            old_queue, new_queue = queues / "2025.json", queues / "2026.json"
+            old_record = {"fields": {"date": {"reviewed_value": "12/17/25"}}}
+            save_queue_session(state, [old], 0, {old: old_record}, {}, saved_queue=old_queue)
+            original = old_queue.read_bytes()
+
+            save_queue_session(state, [], -1, {}, {})
+            self.assertIsNone(load_saved_queue_path(state))
+            self.assertEqual(old_queue.read_bytes(), original)
+            save_queue_session(state, [new], 0, {}, {}, saved_queue=new_queue)
+            new_original = new_queue.read_bytes()
+
+            sources, index, records, failures = load_gui_state(old_queue, require_all_sources=True)
+            records[old.resolve()]["fields"]["date"]["reviewed_value"] = "12/18/25"
+            save_queue_session(state, sources, index, records, failures, saved_queue=old_queue)
+            self.assertEqual(load_saved_queue_path(state), old_queue.resolve())
+            self.assertEqual(new_queue.read_bytes(), new_original)
+            self.assertEqual(load_gui_state(old_queue)[2][old.resolve()]["fields"]["date"]["reviewed_value"],
+                             "12/18/25")
+
+    def test_named_queue_missing_pdf_is_rejected_without_renumbering_saved_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            existing, missing = root / "existing.pdf", root / "missing.pdf"
+            existing.write_bytes(b"%PDF")
+            queue = root / "2025.json"
+            save_gui_state(queue, [missing, existing], 1, {}, {})
+            original = queue.read_bytes()
+
+            with self.assertRaisesRegex(ValueError, "original path"):
+                load_gui_state(queue, require_all_sources=True)
+            self.assertEqual(queue.read_bytes(), original)
+            with self.assertRaisesRegex(ValueError, "not found"):
+                load_gui_state(root / "missing-queue.json", require_all_sources=True)
+
+    def test_named_queue_cannot_overwrite_restart_state_with_its_own_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state.json"
+            save_gui_state(state, [], -1, {}, {})
+            original = state.read_bytes()
+
+            with self.assertRaisesRegex(ValueError, "different"):
+                save_queue_session(state, [], -1, {}, {}, saved_queue=state)
+            self.assertEqual(state.read_bytes(), original)
 
     def test_editable_roster_round_trip(self):
         with tempfile.TemporaryDirectory() as directory:

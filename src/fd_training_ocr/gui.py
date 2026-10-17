@@ -19,9 +19,9 @@ from .gui_controller import (EVENT_SELECTIONS, GuiPaths, accept_stage3_suggestio
                              populate_unit_from_roster_name,
                              automatic_export, build_processor, effective_event_selection,
                              create_startup_backup,
-                             load_gui_state,
+                             load_gui_state, load_saved_queue_path,
                              process_pdf, process_status_rows,
-                             record_is_submitted, save_gui_state,
+                             record_is_submitted, save_queue_session,
                              discover_pdfs, display_value, index_after_removal, structured_rows,
                              queue_index_for_page,
                              attendee_row_from_field, remove_attendee, roster_table_rows,
@@ -164,6 +164,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--export-dir", type=Path, default=Path(r"C:\Temp\Exported"))
     parser.add_argument("--state-file", type=Path,
                         default=Path(r"C:\Temp\fd-training-ocr-gui-state.json"))
+    parser.add_argument("--queues-dir", type=Path,
+                        default=Path(r"C:\Temp\FDTrainingOCR-Queues"))
     parser.add_argument("--backup-dir", type=Path,
                         default=Path(r"C:\Temp\FDTrainingOCR-Backups"))
     parser.add_argument("--fireworks-ids", type=Path,
@@ -196,7 +198,8 @@ def main(argv=None) -> int:
                 state_file=args.state_file, config_file=args.config,
                 roster_file=config.roster_path,
                 fireworks_mappings_file=args.fireworks_ids,
-                fireworks_ledger_file=args.fireworks_ledger)
+                fireworks_ledger_file=args.fireworks_ledger,
+                queues_dir=args.queues_dir)
         except (OSError, ValueError) as exc:
             backup_warning = str(exc)
         QtCore, QtGui, QtWidgets = _qt()
@@ -231,6 +234,7 @@ def main(argv=None) -> int:
             self.record = None
             self.records = {}
             self.failures = {}
+            self.saved_queue_path = None
             self.preview_paths = {}
             self.preview_temp = tempfile.TemporaryDirectory(prefix="fd-training-ocr-gui-")
             self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="fd-ocr")
@@ -261,6 +265,9 @@ def main(argv=None) -> int:
             self.load_button = QtGui.QAction("Add File(s)", self)
             self.folder_button = QtGui.QAction("Add Folder", self)
             self.roster_button = QtGui.QAction("Roster", self)
+            self.save_queue_button = QtGui.QAction("Save Queue As…", self)
+            self.open_queue_button = QtGui.QAction("Open Queue…", self)
+            self.new_queue_button = QtGui.QAction("New Queue", self)
             self.remove_button = QtGui.QAction("Remove PDF", self)
             self.remove_all_button = QtGui.QAction("Remove All", self)
             self.previous_button = QtWidgets.QPushButton("Previous")
@@ -299,6 +306,9 @@ def main(argv=None) -> int:
                 tool.setMenu(menu)
                 return tool
 
+            self.queue_menu_button = menu_tool(
+                "Queue", (self.save_queue_button, self.open_queue_button,
+                          self.new_queue_button))
             self.add_menu_button = menu_tool(
                 "Add", (self.load_button, self.folder_button, self.roster_button))
             self.remove_menu_button = menu_tool(
@@ -310,6 +320,7 @@ def main(argv=None) -> int:
                 "Attendees", (self.add_attendee_button, self.delete_attendee_button))
             self.remove_button.setEnabled(False)
             self.remove_all_button.setEnabled(False)
+            self.save_queue_button.setEnabled(False)
             self.previous_button.setEnabled(False); self.next_button.setEnabled(False)
             self.goto_number.setEnabled(False); self.goto_button.setEnabled(False)
             self.process_button.setEnabled(False); self.process_all_button.setEnabled(False)
@@ -322,7 +333,8 @@ def main(argv=None) -> int:
             self.accept_stage3_button.setEnabled(False)
             self.progress = QtWidgets.QProgressBar(); self.progress.setRange(0, 1); self.progress.setValue(0)
             self.status = QtWidgets.QLabel("Load a PDF to begin")
-            for widget in (self.add_menu_button, self.remove_menu_button,
+            for widget in (self.queue_menu_button,
+                           self.add_menu_button, self.remove_menu_button,
                            self.process_menu_button, self.attendees_menu_button,
                            self.previous_button, self.page_label, self.next_button,
                            self.goto_number, self.goto_button,
@@ -442,6 +454,9 @@ def main(argv=None) -> int:
             self.load_button.triggered.connect(self.load_pdfs)
             self.folder_button.triggered.connect(self.load_folder)
             self.roster_button.triggered.connect(self.show_roster)
+            self.save_queue_button.triggered.connect(self.save_queue_as)
+            self.open_queue_button.triggered.connect(self.open_queue)
+            self.new_queue_button.triggered.connect(self.new_queue)
             self.remove_button.triggered.connect(self.remove_current_pdf)
             self.remove_all_button.triggered.connect(self.remove_all_pdfs)
             self.previous_button.clicked.connect(lambda: self.navigate(-1))
@@ -471,11 +486,15 @@ def main(argv=None) -> int:
 
         def restore_state(self):
             try:
-                sources, current_index, records, failures = load_gui_state(args.state_file)
+                saved_queue_path = load_saved_queue_path(args.state_file)
+                sources, current_index, records, failures = load_gui_state(
+                    args.state_file, require_all_sources=saved_queue_path is not None)
                 self.sources = sources
                 self.current_index = current_index
                 self.records = records
                 self.failures = failures
+                self.saved_queue_path = saved_queue_path
+                self.update_queue_title()
                 if self.current_index >= 0:
                     self.show_current()
                     self.status.setText(
@@ -486,12 +505,142 @@ def main(argv=None) -> int:
             except (OSError, ValueError) as exc:
                 self.status.setText(f"Unable to restore queue: {exc}")
 
-        def persist_state(self):
+        def persist_state(self, *, raise_errors=False):
             try:
-                save_gui_state(args.state_file, self.sources, self.current_index,
-                               self.records, self.failures)
-            except OSError as exc:
+                save_queue_session(
+                    args.state_file, self.sources, self.current_index,
+                    self.records, self.failures, saved_queue=self.saved_queue_path)
+                return True
+            except (OSError, ValueError) as exc:
                 self.status.setText(f"Unable to save queue state: {exc}")
+                if raise_errors:
+                    raise
+                return False
+
+        def update_queue_title(self):
+            suffix = (f" — Queue: {self.saved_queue_path.stem}"
+                      if self.saved_queue_path is not None else " — Unsaved queue")
+            self.setWindowTitle("FD Training OCR" + suffix)
+
+        def preserve_current_queue(self):
+            """Flush edits and save the outgoing queue before replacing it."""
+            if self.record is not None:
+                self.save_formatted_request()
+                automatic_export(self.record, args.export_dir)
+            self.formatted_request_timer.stop()
+            previous_path = self.saved_queue_path
+            if self.sources and self.saved_queue_path is None:
+                self.saved_queue_path = (
+                    args.queues_dir / f"Queue-{datetime.now():%Y-%m-%d-%H%M%S-%f}.json"
+                ).expanduser().resolve()
+            try:
+                self.persist_state(raise_errors=True)
+            except (OSError, ValueError):
+                self.saved_queue_path = previous_path
+                raise
+            self.update_queue_title()
+
+        def save_queue_as(self):
+            if self.busy or self.fireworks_future is not None or not self.sources:
+                return
+            try:
+                args.queues_dir.mkdir(parents=True, exist_ok=True)
+                default = (self.saved_queue_path or args.queues_dir / "Training queue.json")
+                name, _filter = QtWidgets.QFileDialog.getSaveFileName(
+                    self, "Save PDF queue (for example, 2025 or 2026)",
+                    str(default), "PDF queues (*.json)")
+                if not name:
+                    return
+                destination = Path(name).expanduser().resolve()
+                if destination.suffix.casefold() != ".json":
+                    destination = destination.with_suffix(".json")
+                if destination == args.state_file.expanduser().resolve():
+                    raise ValueError("Choose a filename different from the automatic restart state file")
+                if self.record is not None:
+                    self.save_formatted_request()
+                    automatic_export(self.record, args.export_dir)
+                previous_path = self.saved_queue_path
+                self.saved_queue_path = destination
+                try:
+                    self.persist_state(raise_errors=True)
+                except (OSError, ValueError):
+                    self.saved_queue_path = previous_path
+                    raise
+                self.update_queue_title()
+                self.status.setText(
+                    f"Saved queue {destination.stem} — {len(self.sources)} PDFs; automatic saves enabled")
+            except (OSError, ValueError) as exc:
+                QtWidgets.QMessageBox.critical(self, "Unable to save queue", str(exc))
+
+        def replace_queue(self, sources, current_index, records, failures, saved_queue_path):
+            previous = (self.sources, self.current_index, self.records,
+                        self.failures, self.saved_queue_path)
+            self.sources, self.current_index = sources, current_index
+            self.records, self.failures = records, failures
+            self.saved_queue_path = saved_queue_path
+            try:
+                self.persist_state(raise_errors=True)
+            except (OSError, ValueError):
+                (self.sources, self.current_index, self.records,
+                 self.failures, self.saved_queue_path) = previous
+                raise
+            self.preview_paths.clear()
+            self.update_queue_title()
+            if self.current_index >= 0:
+                self.show_current()
+            else:
+                self.clear_queue_view("New queue — add PDFs to begin")
+
+        def open_queue(self):
+            if self.busy or self.fireworks_future is not None:
+                return
+            try:
+                args.queues_dir.mkdir(parents=True, exist_ok=True)
+                name, _filter = QtWidgets.QFileDialog.getOpenFileName(
+                    self, "Open saved PDF queue", str(args.queues_dir), "PDF queues (*.json)")
+                if not name:
+                    return
+                destination = Path(name).expanduser().resolve()
+                if destination == args.state_file.expanduser().resolve():
+                    raise ValueError("Open a named queue from the Queues folder")
+                if destination == self.saved_queue_path:
+                    self.preserve_current_queue()
+                    self.status.setText(f"Queue {destination.stem} is already open")
+                    return
+                state = load_gui_state(destination, require_all_sources=True)
+                self.preserve_current_queue()
+                self.replace_queue(*state, destination)
+                self.status.setText(f"Opened queue {destination.stem} — {len(self.sources)} PDFs")
+            except (OSError, ValueError) as exc:
+                QtWidgets.QMessageBox.critical(self, "Unable to open queue", str(exc))
+
+        def new_queue(self):
+            if self.busy or self.fireworks_future is not None:
+                return
+            try:
+                self.preserve_current_queue()
+                previous_name = self.saved_queue_path.stem if self.saved_queue_path else None
+                self.replace_queue([], -1, {}, {}, None)
+                if previous_name:
+                    self.status.setText(f"Queue {previous_name} saved — add PDFs to the new queue")
+            except (OSError, ValueError) as exc:
+                QtWidgets.QMessageBox.critical(self, "Unable to start new queue", str(exc))
+
+        def clear_queue_view(self, message):
+            self.source = None
+            self.record = None
+            self.preview.scene().clear()
+            self.raw.clear()
+            self.setting_formatted_request = True
+            self.formatted_request.clear()
+            self.setting_formatted_request = False
+            self.formatted_request_dirty = False
+            self.set_formatted_request_message("")
+            self.sync_fireworks_controls({})
+            self.clear_record_form()
+            self.warning.hide()
+            self.status.setText(message)
+            self.update_navigation()
 
         def show_roster(self):
             roster_path = config.roster_path
@@ -818,29 +967,11 @@ def main(argv=None) -> int:
             answer = QtWidgets.QMessageBox.question(
                 self, "Remove all PDFs",
                 f"Remove all {len(self.sources)} PDFs from the GUI queue?\n\n"
+                "The current queue will be saved so you can reopen it later.\n"
                 "Source PDFs and exported JSON files will not be deleted.")
             if answer != QtWidgets.QMessageBox.StandardButton.Yes:
                 return
-            self.sources.clear()
-            self.records.clear()
-            self.failures.clear()
-            self.preview_paths.clear()
-            self.current_index = -1
-            self.source = None
-            self.record = None
-            self.preview.scene().clear()
-            self.raw.clear()
-            self.setting_formatted_request = True
-            self.formatted_request.clear()
-            self.setting_formatted_request = False
-            self.formatted_request_dirty = False
-            self.set_formatted_request_message("")
-            self.sync_fireworks_controls({})
-            self.clear_record_form()
-            self.warning.hide()
-            self.status.setText("Queue cleared — source PDFs and exports were preserved")
-            self.update_navigation()
-            self.persist_state()
+            self.new_queue()
 
         def show_current(self):
             self.source = self.sources[self.current_index]
@@ -887,6 +1018,9 @@ def main(argv=None) -> int:
             self.goto_button.setEnabled(idle and count > 0)
             self.remove_button.setEnabled(idle and self.source is not None)
             self.remove_all_button.setEnabled(idle and bool(self.sources))
+            self.save_queue_button.setEnabled(idle and bool(self.sources))
+            self.open_queue_button.setEnabled(idle)
+            self.new_queue_button.setEnabled(idle)
             self.process_button.setEnabled(idle and self.source is not None)
             self.process_all_button.setEnabled(
                 idle and bool(unprocessed_sources(self.sources, self.records)))
@@ -901,6 +1035,8 @@ def main(argv=None) -> int:
 
         def update_menu_buttons(self):
             groups = (
+                (self.queue_menu_button,
+                 (self.save_queue_button, self.open_queue_button, self.new_queue_button)),
                 (self.add_menu_button,
                  (self.load_button, self.folder_button, self.roster_button)),
                 (self.remove_menu_button,
@@ -2115,7 +2251,13 @@ def main(argv=None) -> int:
                     return
             self.poll_timer.stop()
             self.fireworks_timer.stop()
-            self.persist_state()
+            if not self.persist_state():
+                event.ignore()
+                QtWidgets.QMessageBox.critical(
+                    self, "Unable to save queue",
+                    "The queue could not be saved. The application will remain open "
+                    "so you can resolve the file access problem or save it under another name.")
+                return
             if self.fireworks_client is not None:
                 self.fireworks_client.clear_token()
                 self.fireworks_client = None

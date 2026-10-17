@@ -127,10 +127,28 @@ number to see the source filename. Each record is reconciled through the same su
 path used when that PDF is displayed. A row says `True` exactly when the PDF displays the green **Submitted to
 Fireworks** banner; records without that banner remain `False`. Adding or removing PDFs
 updates the numbering in both navigation and Status.
+
+Use the **Queue** menu to keep separate years or projects without rebuilding their PDF
+order. **Save Queue As…** names the current queue (for example, `2025.json`), **New Queue**
+saves it and starts an empty queue, and **Open Queue…** switches to a saved queue. The default
+folder is `C:\Temp\FDTrainingOCR-Queues`; select another with `--queues-dir`. The window title
+shows the active queue name. Once named, a queue automatically saves subsequent edits,
+processing results, submission state, and the current PDF position. Restarting the app
+restores the active queue. **Remove All** also preserves the outgoing queue before clearing
+the screen; an unnamed queue receives a timestamped filename in the queues folder.
+
+For a year change, save the existing PDFs as `2025.json`, choose **New Queue**, add the 2026
+PDFs, and save as `2026.json`. Use **Open Queue…** to switch between them. Each queue retains
+its own PDF numbering and review data. Queue files reference the original PDFs; keep those
+PDFs in their existing locations. Opening a named queue reports missing PDFs instead of
+silently dropping them and changing the numbering. Sorting the Status table never changes
+the saved queue order.
+
 At startup the GUI snapshots exported JSON, roster, queue state, and configuration into an
 immutable dated and timed folder such as
 `C:\Temp\FDTrainingOCR-Backups\08-22-2026\19-42-10`. Every launch creates a recovery point;
-the latest 20 snapshots are retained across all dates. Use `--backup-dir` to select another
+the latest 20 snapshots are retained across all dates. Named queue JSON files in the configured
+queues folder are included in these backups. Use `--backup-dir` to select another
 backup location.
 
 Fireworks' department-specific IDs stay outside the Git repository in
