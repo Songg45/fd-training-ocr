@@ -429,12 +429,17 @@ def main(argv=None) -> int:
             self.reconcile_fireworks_button.setAccessibleName("Reconcile Fireworks Attempt")
             self.reconcile_fireworks_button.setAccessibleDescription(
                 "Record the result after checking an uncertain attempt directly in Fireworks")
+            self.mark_submitted_button = QtWidgets.QPushButton("Mark Already Submitted…")
+            self.mark_submitted_button.setAccessibleName("Mark Already Submitted")
+            self.mark_submitted_button.setToolTip(
+                "Record an existing Fireworks activity locally without sending a request")
             self.fireworks_connection_status = QtWidgets.QLabel("Not connected")
             formatted_controls.addWidget(self.save_formatted_request_button)
             formatted_controls.addWidget(self.regenerate_formatted_request_button)
             formatted_controls.addWidget(self.connect_fireworks_button)
             formatted_controls.addWidget(self.submit_fireworks_button)
             formatted_controls.addWidget(self.reconcile_fireworks_button)
+            fireworks_fields.addWidget(self.mark_submitted_button, 5, 1)
             formatted_controls.addWidget(self.fireworks_connection_status)
             formatted_controls.addStretch(1)
             formatted_layout.addLayout(fireworks_fields)
@@ -469,6 +474,8 @@ def main(argv=None) -> int:
             self.submit_fireworks_button.clicked.connect(self.submit_to_fireworks)
             self.reconcile_fireworks_button.clicked.connect(
                 self.reconcile_fireworks_attempt)
+            self.mark_submitted_button.clicked.connect(
+                lambda: self.mark_already_submitted(self.source))
             self.load_button.triggered.connect(self.load_pdfs)
             self.folder_button.triggered.connect(self.load_folder)
             self.roster_button.triggered.connect(self.show_roster)
@@ -934,7 +941,68 @@ def main(argv=None) -> int:
             go_to_button.setAccessibleName("Go To PDF")
             go_to_button.setDefault(True)
             go_to_button.setEnabled(False)
+            mark_status_button = buttons.addButton(
+                "Mark Already Submitted…", QtWidgets.QDialogButtonBox.ButtonRole.ActionRole)
+            mark_status_button.setAccessibleName("Mark selected PDF already submitted")
+            mark_status_button.setToolTip(
+                "Select a processed PDF, confirm it already exists in Fireworks, "
+                "and record it locally without sending a request")
+            mark_status_button.setEnabled(False)
             target_index = None
+
+            def selected_source():
+                selected = table.selectionModel().selectedRows(1)
+                if not selected:
+                    return None
+                number = table.item(selected[0].row(), 1).data(QtCore.Qt.ItemDataRole.UserRole)
+                return self.sources[queue_index_for_page(number, len(self.sources))]
+
+            def update_status_actions():
+                source = selected_source()
+                go_to_button.setEnabled(source is not None)
+                record = self.records.get(source)
+                submission = record.get("fireworks_submission", {}) if isinstance(record, dict) else {}
+                locked = (isinstance(submission, dict)
+                          and submission.get("status") in LOCKED_SUBMISSION_STATUSES)
+                mark_status_button.setEnabled(isinstance(record, dict) and not locked)
+
+            def mark_selected_submitted():
+                source = selected_source()
+                if source is None:
+                    return
+                self.mark_already_submitted(source)
+                try:
+                    for record in self.records.values():
+                        if isinstance(record, dict):
+                            changed, _entry = fireworks_submissions.reconcile_record(record)
+                            if changed:
+                                automatic_export(record, args.export_dir)
+                    self.persist_state(raise_errors=True)
+                except (OSError, ValueError) as exc:
+                    QtWidgets.QMessageBox.critical(
+                        dialog, "Unable to refresh submission status", str(exc))
+                refreshed = process_status_rows(self.sources, self.records, self.human_reviews)
+                submitted = sum(row.submitted for row in refreshed)
+                summary.setText(
+                    f"{len(refreshed)} PDF record{'s' if len(refreshed) != 1 else ''} — "
+                    f"{submitted} submitted — {len(refreshed) - submitted} not submitted")
+                table.setSortingEnabled(False)
+                for index in range(table.rowCount()):
+                    number = table.item(index, 1).data(QtCore.Qt.ItemDataRole.UserRole)
+                    row = refreshed[number - 1]
+                    submitted_item = table.item(index, 2)
+                    submitted_item.sort_key = (row.submitted, number)
+                    submitted_item.setText(str(row.submitted))
+                    review_item = table.item(index, 3)
+                    review_item.sort_key = (-1 if row.human_review is None else int(row.human_review), number)
+                    review_item.setText("" if row.human_review is None else str(row.human_review))
+                    combo = table.cellWidget(index, 3)
+                    combo.blockSignals(True)
+                    combo.setCurrentIndex(combo.findData(row.human_review)
+                                          if row.human_review is not None else -1)
+                    combo.blockSignals(False)
+                table.setSortingEnabled(True)
+                update_status_actions()
 
             def go_to_selected():
                 nonlocal target_index
@@ -946,10 +1014,9 @@ def main(argv=None) -> int:
                 target_index = queue_index_for_page(pdf_number, len(self.sources))
                 dialog.accept()
 
-            table.itemSelectionChanged.connect(
-                lambda: go_to_button.setEnabled(
-                    bool(table.selectionModel().selectedRows(1))))
+            table.itemSelectionChanged.connect(update_status_actions)
             go_to_button.clicked.connect(go_to_selected)
+            mark_status_button.clicked.connect(mark_selected_submitted)
             table.cellDoubleClicked.connect(lambda *_args: go_to_selected())
             if 0 <= self.current_index < len(rows):
                 table.setCurrentCell(self.current_index, 1)
@@ -1652,6 +1719,8 @@ def main(argv=None) -> int:
                 and self.fireworks_client.connected)
             self.reconcile_fireworks_button.setEnabled(
                 idle and ledger_ready and reconcilable)
+            self.mark_submitted_button.setEnabled(
+                idle and ledger_ready and self.record is not None and not locked)
             self.save_formatted_request_button.setEnabled(
                 idle and self.record is not None and not locked)
             self.regenerate_formatted_request_button.setEnabled(
@@ -1998,6 +2067,84 @@ def main(argv=None) -> int:
             finally:
                 self.update_navigation()
 
+        def mark_already_submitted(self, source):
+            if self.busy or self.fireworks_future is not None:
+                return False
+            record = self.records.get(source)
+            if not isinstance(record, dict):
+                QtWidgets.QMessageBox.information(
+                    self, "No record available", "Process this PDF before marking it submitted.")
+                return False
+            try:
+                fireworks_submissions.reconcile_record(record)
+                submission = record.get("fireworks_submission", {})
+                if (isinstance(submission, dict)
+                        and submission.get("status") in LOCKED_SUBMISSION_STATUSES):
+                    raise ValueError(
+                        "This PDF is already submitted or has an uncertain attempt. "
+                        "Use Reconcile Attempt for attempting or unknown outcomes.")
+                dialog = QtWidgets.QDialog(self)
+                dialog.setWindowTitle("Mark Already Submitted to Fireworks")
+                layout = QtWidgets.QVBoxLayout(dialog)
+                explanation = QtWidgets.QLabel(
+                    f"PDF {self.sources.index(source) + 1}: {source.name}\n\n"
+                    "Use this only after checking that this training record already exists "
+                    "in Fireworks. This creates a local audit receipt and blocks another "
+                    "upload of this PDF. No request will be sent to Fireworks.")
+                explanation.setWordWrap(True)
+                layout.addWidget(explanation)
+                id_label = QtWidgets.QLabel("Existing Fireworks activity ID (optional):")
+                activity_id_input = QtWidgets.QLineEdit()
+                activity_id_input.setAccessibleName("Existing Fireworks activity ID")
+                activity_id_input.setPlaceholderText("Leave blank if unknown")
+                id_label.setBuddy(activity_id_input)
+                layout.addWidget(id_label)
+                layout.addWidget(activity_id_input)
+                confirmed = QtWidgets.QCheckBox(
+                    "I checked Fireworks and this training record is already submitted")
+                confirmed.setAccessibleName("Confirm already submitted in Fireworks")
+                layout.addWidget(confirmed)
+                buttons = QtWidgets.QDialogButtonBox(
+                    QtWidgets.QDialogButtonBox.StandardButton.Ok |
+                    QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+                confirm_button = buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Ok)
+                confirm_button.setText("Mark Submitted")
+                confirm_button.setEnabled(False)
+                confirmed.toggled.connect(confirm_button.setEnabled)
+                buttons.accepted.connect(dialog.accept)
+                buttons.rejected.connect(dialog.reject)
+                layout.addWidget(buttons)
+                if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted or not confirmed.isChecked():
+                    return False
+                text = activity_id_input.text().strip()
+                if text and (not text.isascii() or not text.isdecimal() or int(text) <= 0):
+                    raise ValueError("Activity ID must be a positive integer, or leave it blank")
+                if source == self.source:
+                    # Preserve a pending visible edit, including an invalid JSON draft;
+                    # an external submission does not require a valid local payload.
+                    self.save_formatted_request()
+                fireworks_submissions.mark_existing_submitted(
+                    record=record, activity_id=int(text) if text else None)
+                # The durable ledger comes first. If a later local save fails, it still
+                # protects the PDF and the usual reconciliation restores its banner.
+                automatic_export(record, args.export_dir)
+                self.persist_state(raise_errors=True)
+                if source == self.source:
+                    self.display_record(record)
+                self.status.setText(
+                    f"Marked PDF {self.sources.index(source) + 1} already submitted — "
+                    "local confirmation only; no Fireworks request sent")
+                return True
+            except (OSError, ValueError, DuplicateSubmissionError) as exc:
+                if source == self.source:
+                    self.display_record(record)
+                QtWidgets.QMessageBox.critical(
+                    self, "Unable to save submitted confirmation",
+                    str(exc) + "\n\nNo request was sent to Fireworks. "
+                    "If the receipt was saved before another save failed, it remains in "
+                    "the ledger and the PDF remains protected from duplicate submission.")
+                return False
+
         def reconcile_fireworks_attempt(self):
             if self.record is None or self.fireworks_future is not None or self.busy:
                 return
@@ -2216,15 +2363,15 @@ def main(argv=None) -> int:
                 self.set_formatted_request_message(
                     "FIREWORKS ATTEMPT RESERVED — manually reconcile before any retry",
                     "#8b1e1e")
-            elif request_source == "draft":
-                self.set_formatted_request_message(
-                    "INVALID JSON DRAFT PRESERVED — correct it to save a request",
-                    "#8b1e1e")
             elif submission_status == "submitted":
                 activity = submission.get("activity_id")
                 self.set_formatted_request_message(
                     "SUBMITTED TO FIREWORKS"
                     + (f" — activity {activity}" if activity else ""), "#286428")
+            elif request_source == "draft":
+                self.set_formatted_request_message(
+                    "INVALID JSON DRAFT PRESERVED — correct it to save a request",
+                    "#8b1e1e")
             elif submission_status == "unknown":
                 self.set_formatted_request_message(
                     "FIREWORKS OUTCOME UNKNOWN — verify before any resubmission",

@@ -3,6 +3,7 @@ import hashlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 from urllib.request import Request
 
@@ -426,6 +427,95 @@ class SubmissionLedgerTests(unittest.TestCase):
                 record["fireworks_submission"]["activity_id"], 94)
             with self.assertRaises(DuplicateSubmissionError):
                 ledger.assert_may_submit(record, payload)
+
+    def test_preexisting_submission_is_source_only_audited_and_durable(self):
+        with TemporaryDirectory() as name:
+            ledger = SubmissionLedger(Path(name) / "submissions.jsonl")
+            coordinator = SubmissionCoordinator(ledger)
+            for activity_id, digest in ((None, "a" * 64), (9876, "b" * 64)):
+                record = {**self.record(), "source_sha256": digest}
+                with patch.object(FireworksClient, "post_activity") as post:
+                    entry = coordinator.mark_existing_submitted(
+                        record=record, activity_id=activity_id,
+                        recorded_at="2026-10-16T18:00:00+00:00")
+                    post.assert_not_called()
+                self.assertEqual(entry["status"], "submitted")
+                self.assertEqual(entry["activity_id"], activity_id)
+                self.assertEqual(entry["recorded_at"], "2026-10-16T18:00:00+00:00")
+                self.assertTrue(entry["attempt_id"])
+                for key in ("payload", "payload_sha256", "activity_fingerprint",
+                            "response", "response_status", "response_text", "endpoint"):
+                    self.assertIsNone(entry[key])
+                self.assertEqual(entry["reconciliation"]["decision"],
+                                 "confirmed_preexisting_submitted")
+                self.assertEqual(record["fireworks_submission"]["activity_id"], activity_id)
+                with self.assertRaises(DuplicateSubmissionError):
+                    ledger.assert_may_submit(record, {"assignTitle": "Edited after marking"})
+                restarted = SubmissionCoordinator(SubmissionLedger(ledger.path))
+                reprocessed = {**self.record(), "source_sha256": digest}
+                changed, _ = restarted.reconcile_record(reprocessed)
+                self.assertTrue(changed)
+                self.assertEqual(reprocessed["fireworks_submission"], record["fireworks_submission"])
+            # Two source-only receipts must not share a fabricated empty-body digest
+            # that accidentally locks every other PDF with an unrelated payload.
+            ledger.assert_may_submit({**self.record(), "source_sha256": "c" * 64}, {})
+            self.assertEqual(len(ledger.entries()), 2)
+
+    def test_preexisting_submission_keeps_prior_rejection_and_cannot_be_marked_twice(self):
+        with TemporaryDirectory() as name:
+            ledger = SubmissionLedger(Path(name) / "submissions.jsonl")
+            coordinator = SubmissionCoordinator(ledger)
+            record = self.record()
+            ledger.append(record=record, payload={}, status="rejected", error="old failure")
+            entry = coordinator.mark_existing_submitted(record=record, activity_id=94)
+            self.assertEqual(entry["reconciliation"]["prior_status"], "rejected")
+            self.assertEqual(ledger.entries()[0]["error"], "old failure")
+            with self.assertRaises(DuplicateSubmissionError):
+                coordinator.mark_existing_submitted(record=record, activity_id=95)
+            self.assertEqual(len(ledger.entries()), 2)
+
+    def test_preexisting_mark_does_not_bypass_uncertain_attempt_reconciliation(self):
+        with TemporaryDirectory() as name:
+            for status in ("attempting", "unknown", "submitted"):
+                ledger = SubmissionLedger(Path(name) / f"{status}.jsonl")
+                coordinator = SubmissionCoordinator(ledger)
+                record = self.record()
+                ledger.append(record=record, payload={}, status=status, attempt_id="old-attempt")
+                with self.assertRaises(DuplicateSubmissionError):
+                    coordinator.mark_existing_submitted(record=record)
+                self.assertEqual(len(ledger.entries()), 1)
+            cached = {**self.record(), "fireworks_submission": {"status": "unknown"}}
+            with self.assertRaises(DuplicateSubmissionError):
+                SubmissionCoordinator(SubmissionLedger(Path(name) / "missing.jsonl")).mark_existing_submitted(
+                    record=cached)
+
+    def test_preexisting_mark_validates_id_identity_and_persists_before_state_change(self):
+        with TemporaryDirectory() as name:
+            ledger = SubmissionLedger(Path(name) / "submissions.jsonl")
+            coordinator = SubmissionCoordinator(ledger)
+            record = self.record()
+            for invalid in (0, -1, True, "94", 1.5):
+                with self.assertRaises(ValueError):
+                    coordinator.mark_existing_submitted(record=record, activity_id=invalid)
+            with self.assertRaises(ValueError):
+                coordinator.mark_existing_submitted(record={})
+            self.assertFalse(ledger.path.exists())
+            with patch("fd_training_ocr.fireworks_client.os.fsync", side_effect=OSError("disk failure")):
+                with self.assertRaises(OSError):
+                    coordinator.mark_existing_submitted(record=record)
+            self.assertNotIn("fireworks_submission", record)
+            # Even if durability fails after a write, a later reader conservatively
+            # recognizes the receipt rather than enabling a duplicate upload.
+            self.assertEqual(ledger.effective_entry(record)["status"], "submitted")
+
+    def test_normal_api_attempts_cannot_omit_the_payload(self):
+        with TemporaryDirectory() as name:
+            ledger = SubmissionLedger(Path(name) / "submissions.jsonl")
+            for status in ("attempting", "unknown", "submitted", "rejected"):
+                with self.assertRaisesRegex(ValueError, "preexisting"):
+                    ledger.append(record=self.record(), payload=None, status=status,
+                                  attempt_id="test-attempt")
+            self.assertFalse(ledger.path.exists())
 
     def test_manual_not_submitted_reconciliation_releases_unknown_attempt(self):
         with TemporaryDirectory() as name:

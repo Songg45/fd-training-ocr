@@ -150,6 +150,20 @@ Fireworks request. It stays with the PDF when sorting or renumbering and survive
 and named-queue switches. Unprocessed PDFs can be marked without making them count as
 OCR-processed. Replacing a PDF clears the old PDF's Human Review choice for that slot.
 
+If a training record is already in Fireworks but the program has no receipt for it, select
+its processed PDF in **Process > Status** and click **Mark Already Submitted…**. The same
+button is available in **Formatted Request** for the current PDF. Check the existing
+activity in Fireworks, optionally enter its positive activity ID (not its PDF number),
+check the confirmation box, and choose **Mark Submitted**. No bearer token, API lookup,
+POST, or valid upload payload is required. This writes a timestamped, human-confirmed
+receipt to the local submission ledger; it does not fabricate a server response or claim
+the current payload was sent. The green banner and Submitted column become `True`,
+and further uploads of that PDF are blocked even after restarting or reprocessing.
+Human Review follows its usual submitted default unless you already chose a value.
+This does not verify, approve, lock, or close an activity on the server. Already-submitted
+records cannot be marked again; use **Reconcile Attempt** for uncertain (`attempting` or
+`unknown`) attempts instead. Source PDFs and earlier receipts are not modified.
+
 Use the **Queue** menu to keep separate years or projects without rebuilding their PDF
 order. **Save Queue As…** names the current queue (for example, `2025.json`), **New Queue**
 saves it and starts an empty queue, and **Open Queue…** switches to a saved queue. The default

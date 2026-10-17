@@ -452,18 +452,27 @@ class SubmissionLedger:
             recorded_at=recorded_at)
 
     def append(
-            self, *, record: Mapping[str, Any], payload: Mapping[str, Any],
+            self, *, record: Mapping[str, Any], payload: Mapping[str, Any] | None,
             status: str, response: Mapping[str, Any] | None = None,
             error: str | None = None,
             recorded_at: str | None = None, attempt_id: str | None = None,
             endpoint: str | None = None, response_status: int | None = None,
             response_text: str | None = None,
             response_body_sha256: str | None = None,
+            activity_id: int | None = None,
             reconciliation: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
         if status not in LEDGER_STATUSES:
             raise ValueError("invalid Fireworks submission status")
         if status == "attempting" and not str(attempt_id or "").strip():
             raise ValueError("attempting ledger entries require an attempt ID")
+        if payload is None and not (
+                status == "submitted" and isinstance(reconciliation, Mapping)
+                and reconciliation.get("decision") == "confirmed_preexisting_submitted"):
+            raise ValueError("only a confirmed preexisting submission may omit its API payload")
+        if activity_id is not None and (
+                isinstance(activity_id, bool) or not isinstance(activity_id, int)
+                or activity_id <= 0):
+            raise ValueError("activity ID must be a positive integer or left blank")
         digest, page = _record_identity(record)
         response_payload = dict(response) if isinstance(response, Mapping) else None
         if response_text is not None and response_body_sha256 is None:
@@ -478,13 +487,14 @@ class SubmissionLedger:
             "source_file": record.get("source_file"),
             "source_sha256": digest,
             "page": page,
-            "payload_sha256": fireworks_payload_hash(payload),
-            "activity_fingerprint": activity_fingerprint(payload),
-            "payload": dict(payload),
+            "payload_sha256": fireworks_payload_hash(payload) if payload is not None else None,
+            "activity_fingerprint": activity_fingerprint(payload) if payload is not None else None,
+            "payload": dict(payload) if payload is not None else None,
             "duration_override": (
                 dict(record["fireworks_duration_override"])
-                if duration_override_matches(record, payload) else None),
+                if payload is not None and duration_override_matches(record, payload) else None),
             "activity_id": (
+                activity_id if activity_id is not None else
                 activity_id_from_response(response_payload)
                 if response_payload is not None else None),
             "response_status": response_status,
@@ -581,6 +591,32 @@ class SubmissionCoordinator:
             response_text=response_text,
             response_body_sha256=response_body_sha256,
             error=error, reconciliation=reconciliation,
+            recorded_at=recorded_at)
+        record["fireworks_submission"] = self._record_state(entry)
+        return entry
+
+    def mark_existing_submitted(
+            self, *, record: dict[str, Any], activity_id: int | None = None,
+            recorded_at: str | None = None) -> Mapping[str, Any]:
+        """Record a human-confirmed existing activity without an API call or fake payload."""
+        if activity_id is not None and (
+                isinstance(activity_id, bool) or not isinstance(activity_id, int)
+                or activity_id <= 0):
+            raise ValueError("activity ID must be a positive integer or left blank")
+        prior = self.ledger.effective_entry(record)
+        state = prior if prior is not None else record.get("fireworks_submission", {})
+        if isinstance(state, Mapping) and state.get("status") in LOCKED_SUBMISSION_STATUSES:
+            raise DuplicateSubmissionError(
+                "This PDF is already submitted or has an uncertain attempt; "
+                "use Reconcile Attempt for attempting or unknown outcomes")
+        entry = self.ledger.append(
+            record=record, payload=None, status="submitted",
+            attempt_id=str(uuid4()), activity_id=activity_id,
+            reconciliation={
+                "decision": "confirmed_preexisting_submitted",
+                "prior_status": state.get("status") if isinstance(state, Mapping) else None,
+                "review_method": "reviewer checked the existing activity in Fireworks directly",
+            },
             recorded_at=recorded_at)
         record["fireworks_submission"] = self._record_state(entry)
         return entry
