@@ -128,7 +128,7 @@ The final submission confirmation repeats both values. Invalid dates, end-before
 nonpositive hours, and other validation errors are still checked. Uncheck the box to restore
 the normal hours-match requirement.
 
-Use **Process > Status** to see **Date of Class | PDF Number | Submitted?** for the PDFs
+Use **Process > Status** to see **Date of Class | PDF Number | Submitted? | Human Review** for the PDFs
 currently loaded in the GUI. PDF Number is the one-based position shown at the top of the
 main window and used by Go To. Rows open in queue order, with the date and submission
 state read directly from each queued PDF's own record. Click **Submitted?** to group by
@@ -141,6 +141,14 @@ same submission path used when that PDF is displayed. A row says `True` exactly 
 PDF displays the green **Submitted to Fireworks** banner; records without that banner
 remain `False`. Adding or removing PDFs
 updates the numbering in both navigation and Status.
+
+**Human Review** starts as `True` for submitted PDFs and blank for unsubmitted PDFs.
+Use its dropdown to choose `True` or `False`; your selection saves immediately and takes
+precedence over that default, including an explicit `False` on a submitted PDF. The choice
+is a local tracking flag, not a change to submission status, the green banner, or the
+Fireworks request. It stays with the PDF when sorting or renumbering and survives restarts
+and named-queue switches. Unprocessed PDFs can be marked without making them count as
+OCR-processed. Replacing a PDF clears the old PDF's Human Review choice for that slot.
 
 Use the **Queue** menu to keep separate years or projects without rebuilding their PDF
 order. **Save Queue As…** names the current queue (for example, `2025.json`), **New Queue**

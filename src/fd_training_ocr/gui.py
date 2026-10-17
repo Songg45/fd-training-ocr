@@ -19,7 +19,7 @@ from .gui_controller import (EVENT_SELECTIONS, GuiPaths, accept_stage3_suggestio
                              populate_unit_from_roster_name,
                              automatic_export, build_processor, effective_event_selection,
                              create_startup_backup,
-                             load_gui_state, load_saved_queue_path,
+                             load_gui_state, load_human_reviews, load_saved_queue_path,
                              process_pdf, process_status_rows,
                              record_is_submitted, save_queue_session,
                              discover_pdfs, display_value, index_after_removal, structured_rows,
@@ -234,6 +234,7 @@ def main(argv=None) -> int:
             self.source = None
             self.record = None
             self.records = {}
+            self.human_reviews = {}
             self.failures = {}
             self.saved_queue_path = None
             self.preview_paths = {}
@@ -507,10 +508,12 @@ def main(argv=None) -> int:
                 saved_queue_path = load_saved_queue_path(args.state_file)
                 sources, current_index, records, failures = load_gui_state(
                     args.state_file, require_all_sources=saved_queue_path is not None)
+                human_reviews = load_human_reviews(args.state_file, sources)
                 self.sources = sources
                 self.current_index = current_index
                 self.records = records
                 self.failures = failures
+                self.human_reviews = human_reviews
                 self.saved_queue_path = saved_queue_path
                 self.update_queue_title()
                 if self.current_index >= 0:
@@ -527,7 +530,8 @@ def main(argv=None) -> int:
             try:
                 save_queue_session(
                     args.state_file, self.sources, self.current_index,
-                    self.records, self.failures, saved_queue=self.saved_queue_path)
+                    self.records, self.failures, saved_queue=self.saved_queue_path,
+                    human_reviews=self.human_reviews)
                 return True
             except (OSError, ValueError) as exc:
                 self.status.setText(f"Unable to save queue state: {exc}")
@@ -591,17 +595,18 @@ def main(argv=None) -> int:
                 QtWidgets.QMessageBox.critical(self, "Unable to save queue", str(exc))
 
         def replace_queue(self, sources, current_index, records, failures, saved_queue_path,
-                          *, preview_paths=None):
+                          *, preview_paths=None, human_reviews=None):
             previous = (self.sources, self.current_index, self.records,
-                        self.failures, self.saved_queue_path)
+                        self.failures, self.saved_queue_path, self.human_reviews)
             self.sources, self.current_index = sources, current_index
             self.records, self.failures = records, failures
             self.saved_queue_path = saved_queue_path
+            self.human_reviews = dict(human_reviews or {})
             try:
                 self.persist_state(raise_errors=True)
             except (OSError, ValueError):
                 (self.sources, self.current_index, self.records,
-                 self.failures, self.saved_queue_path) = previous
+                 self.failures, self.saved_queue_path, self.human_reviews) = previous
                 raise
             self.preview_paths = dict(preview_paths) if preview_paths is not None else {}
             self.update_queue_title()
@@ -627,8 +632,9 @@ def main(argv=None) -> int:
                     self.status.setText(f"Queue {destination.stem} is already open")
                     return
                 state = load_gui_state(destination, require_all_sources=True)
+                human_reviews = load_human_reviews(destination, state[0])
                 self.preserve_current_queue()
-                self.replace_queue(*state, destination)
+                self.replace_queue(*state, destination, human_reviews=human_reviews)
                 self.status.setText(f"Opened queue {destination.stem} — {len(self.sources)} PDFs")
             except (OSError, ValueError) as exc:
                 QtWidgets.QMessageBox.critical(self, "Unable to open queue", str(exc))
@@ -791,7 +797,7 @@ def main(argv=None) -> int:
                         reconciled_any = True
                 if reconciled_any:
                     self.persist_state()
-                rows = process_status_rows(self.sources, self.records)
+                rows = process_status_rows(self.sources, self.records, self.human_reviews)
             except (OSError, ValueError) as exc:
                 QtWidgets.QMessageBox.critical(
                     self, "Unable to build process status", str(exc))
@@ -809,13 +815,13 @@ def main(argv=None) -> int:
             summary.setAccessibleName("Process status summary")
             layout.addWidget(summary)
 
-            table = QtWidgets.QTableWidget(len(rows), 3)
+            table = QtWidgets.QTableWidget(len(rows), 4)
             table.setHorizontalHeaderLabels(
-                ["Date of Class", "PDF Number", "Submitted?"])
+                ["Date of Class", "PDF Number", "Submitted?", "Human Review"])
             table.setAccessibleName("PDF process status")
             table.setAccessibleDescription(
                 "Date of class, PDF number matching main-window navigation, "
-                "and submission status")
+                "submission status, and editable Human Review True or False")
             table.verticalHeader().setVisible(False)
             table.setSortingEnabled(False)
             table.setEditTriggers(
@@ -834,30 +840,77 @@ def main(argv=None) -> int:
                 def __lt__(self, other):
                     return self.sort_key < other.sort_key
 
+            def save_human_review(source, combo, item):
+                previous = self.human_reviews.get(source)
+                value = combo.currentData()
+                if not isinstance(value, bool):
+                    return
+                self.human_reviews[source] = value
+                try:
+                    self.persist_state(raise_errors=True)
+                except (OSError, ValueError) as exc:
+                    if previous is None:
+                        self.human_reviews.pop(source, None)
+                    else:
+                        self.human_reviews[source] = previous
+                    displayed = process_status_rows(
+                        [source], self.records, self.human_reviews)[0].human_review
+                    combo.blockSignals(True)
+                    combo.setCurrentIndex(combo.findData(displayed)
+                                          if displayed is not None else -1)
+                    combo.blockSignals(False)
+                    QtWidgets.QMessageBox.critical(
+                        dialog, "Unable to save Human Review", str(exc))
+                    return
+                # Keep the sort item and dropdown bound to the same PDF after sorting.
+                item.sort_key = (int(value), item.data(QtCore.Qt.ItemDataRole.UserRole))
+                item.setText("True" if value else "False")
+                if table.isSortingEnabled():
+                    header = table.horizontalHeader()
+                    table.sortItems(header.sortIndicatorSection(), header.sortIndicatorOrder())
+
             for row_number, row in enumerate(rows):
                 try:
                     class_date = datetime.strptime(row.date_of_class, "%m/%d/%y")
                 except ValueError:
                     class_date = datetime.max
                 values = (row.date_of_class, str(row.pdf_number),
-                          "True" if row.submitted else "False")
+                          "True" if row.submitted else "False",
+                          "" if row.human_review is None else str(row.human_review))
                 sort_keys = (
                     (class_date, row.pdf_number), (row.pdf_number,),
-                    (row.submitted, row.pdf_number))
+                    (row.submitted, row.pdf_number),
+                    (-1 if row.human_review is None else int(row.human_review), row.pdf_number))
                 for column, value in enumerate(values):
                     item = StatusItem(value, sort_keys[column])
-                    if column in (1, 2):
+                    if column in (1, 2, 3):
                         item.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
                     if column == 1:
                         item.setToolTip(str(self.sources[row.pdf_number - 1]))
                         item.setData(QtCore.Qt.ItemDataRole.UserRole, row.pdf_number)
                     table.setItem(row_number, column, item)
+                source = self.sources[row.pdf_number - 1]
+                review_item = table.item(row_number, 3)
+                review_item.setData(QtCore.Qt.ItemDataRole.UserRole, row.pdf_number)
+                combo = QtWidgets.QComboBox(table)
+                combo.setAccessibleName(f"Human Review for PDF {row.pdf_number}")
+                combo.setPlaceholderText("")
+                combo.addItem("True", True)
+                combo.addItem("False", False)
+                combo.setCurrentIndex(combo.findData(row.human_review)
+                                      if row.human_review is not None else -1)
+                combo.currentIndexChanged.connect(
+                    lambda _index, source=source, combo=combo, item=review_item:
+                    save_human_review(source, combo, item))
+                table.setCellWidget(row_number, 3, combo)
             table.horizontalHeader().setSectionResizeMode(
                 0, QtWidgets.QHeaderView.ResizeMode.Stretch)
             table.horizontalHeader().setSectionResizeMode(
                 1, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
             table.horizontalHeader().setSectionResizeMode(
                 2, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+            table.horizontalHeader().setSectionResizeMode(
+                3, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
             table.horizontalHeader().setSortIndicator(
                 1, QtCore.Qt.SortOrder.AscendingOrder)
             table.setSortingEnabled(True)
@@ -868,7 +921,10 @@ def main(argv=None) -> int:
                 "Click Submitted? to group by status, or PDF Number to restore queue order. "
                 "Select a row and choose Go To PDF to open that document. "
                 "Submitted is True exactly when that PDF displays the "
-                "green Submitted to Fireworks banner.")
+                "green Submitted to Fireworks banner. "
+                "Human Review defaults to True for submitted PDFs and blank otherwise; "
+                "choose True or False to save your own review status. "
+                "This does not change submission status.")
             explanation.setWordWrap(True)
             layout.addWidget(explanation)
             buttons = QtWidgets.QDialogButtonBox(
@@ -1010,7 +1066,9 @@ def main(argv=None) -> int:
                 previews[replacement] = pages[0].path
                 self.replace_queue(
                     sources, self.current_index, records, failures, self.saved_queue_path,
-                    preview_paths=previews)
+                    preview_paths=previews,
+                    human_reviews={source: value for source, value in self.human_reviews.items()
+                                   if source not in replaced_sources})
                 self.progress.setRange(0, 1)
                 self.progress.setValue(0)
                 self.status.setText(
@@ -1026,6 +1084,7 @@ def main(argv=None) -> int:
             source = self.sources.pop(self.current_index)
             self.records.pop(source, None)
             self.failures.pop(source, None)
+            self.human_reviews.pop(source, None)
             self.preview_paths.pop(source, None)
             self.current_index = index_after_removal(self.current_index, len(self.sources))
             if self.current_index >= 0:

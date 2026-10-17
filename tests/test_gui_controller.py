@@ -19,7 +19,7 @@ from fd_training_ocr.gui_controller import (GuiPaths, accept_stage3_suggestion, 
                                              process_status_rows, ProcessStatusRow,
                                              structured_rows,
                                              queue_index_for_page, sources_with_replacement,
-                                             load_gui_state, load_saved_queue_path,
+                                             load_gui_state, load_human_reviews, load_saved_queue_path,
                                              save_gui_state, save_queue_session, unprocessed_sources,
                                              attendee_row_from_field, remove_attendee,
                                              first_available_attendee_row,
@@ -54,7 +54,7 @@ class GuiControllerTests(unittest.TestCase):
             process_status_rows((second, first, third), records),
             (
                 ProcessStatusRow("01/01/26", 1, False),
-                ProcessStatusRow("12/17/25", 2, True),
+                ProcessStatusRow("12/17/25", 2, True, True),
                 ProcessStatusRow("", 3, False),
             ),
         )
@@ -78,7 +78,7 @@ class GuiControllerTests(unittest.TestCase):
         self.assertEqual(
             process_status_rows((first, second), records),
             (
-                ProcessStatusRow("08/02/26", 1, True),
+                ProcessStatusRow("08/02/26", 1, True, True),
                 ProcessStatusRow("08/03/26", 2, False),
             ),
         )
@@ -92,9 +92,35 @@ class GuiControllerTests(unittest.TestCase):
 
         self.assertEqual(
             process_status_rows((second,), records),
-            (ProcessStatusRow("", 1, True),),
+            (ProcessStatusRow("", 1, True, True),),
         )
         self.assertEqual(process_status_rows((), records), ())
+
+    def test_human_review_defaults_and_choices_are_independent_of_submission(self):
+        sources = [Path(f"form-{index}.pdf") for index in range(6)]
+        records = {
+            sources[0]: {"fireworks_submission": {"status": "submitted"}},
+            sources[1]: {"fireworks_submission": {"status": "submitted"}},
+            sources[2]: {"fireworks_submission": {"status": "unknown"}},
+            sources[3]: {"fireworks_submission": {"status": "rejected"}},
+        }
+        original = json.dumps({str(path): record for path, record in records.items()})
+        choices = {sources[1]: False, sources[2]: True, sources[4]: False}
+        rows = process_status_rows(sources, records, choices)
+        self.assertEqual([row.human_review for row in rows],
+                         [True, False, True, None, False, None])
+        self.assertEqual([row.submitted for row in rows],
+                         [True, True, False, False, False, False])
+        self.assertEqual(json.dumps({str(path): record for path, record in records.items()}), original)
+        self.assertEqual(unprocessed_sources(sources, records), tuple(sources[4:]))
+
+    def test_human_review_follows_source_not_queue_number_or_filename(self):
+        first, second = Path("a/form.pdf"), Path("b/form.pdf")
+        choices = {first: True, second: False}
+        self.assertEqual(process_status_rows([second, first], {}, choices), (
+            ProcessStatusRow("", 1, False, False), ProcessStatusRow("", 2, False, True)))
+        self.assertEqual(process_status_rows([first], {}, choices), (
+            ProcessStatusRow("", 1, False, True),))
 
     def test_add_attendee_roster_linking_is_bidirectional_and_preserves_unknowns(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -592,7 +618,55 @@ class GuiControllerTests(unittest.TestCase):
             self.assertEqual(records[first.resolve()], record)
             self.assertEqual(failures[second.resolve()], "bad scan")
             self.assertEqual(process_status_rows(sources, records), (
-                ProcessStatusRow("", 1, False), ProcessStatusRow("12/17/25", 2, True)))
+                ProcessStatusRow("", 1, False), ProcessStatusRow("12/17/25", 2, True, True)))
+
+    def test_human_reviews_survive_restart_and_named_queue_switches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first, second, other = (root / name for name in ("first.pdf", "second.pdf", "other.pdf"))
+            for source in (first, second, other):
+                source.write_bytes(b"%PDF")
+            first, second, other = first.resolve(), second.resolve(), other.resolve()
+            state, queue, next_queue = root / "state.json", root / "2025.json", root / "2026.json"
+            choices = {first: False, second: True, other: False}
+            record = {"fireworks_submission": {"status": "submitted"}}
+            save_queue_session(state, [first, second], 1, {first: record}, {},
+                               saved_queue=queue, human_reviews=choices)
+            expected = {first: False, second: True}
+            self.assertEqual(load_human_reviews(state, [first, second]), expected)
+            self.assertEqual(load_human_reviews(queue, [first, second]), expected)
+            sources, _, records, _ = load_gui_state(queue)
+            self.assertEqual(unprocessed_sources(sources, records), (second,))
+            original = queue.read_bytes()
+            save_queue_session(state, [other], 0, {}, {}, saved_queue=next_queue,
+                               human_reviews={other: False})
+            self.assertEqual(load_human_reviews(state, [other]), {other: False})
+            self.assertEqual(queue.read_bytes(), original)
+            self.assertEqual(load_human_reviews(queue, [first, second]), expected)
+
+    def test_legacy_queues_and_missing_human_review_metadata_are_compatible(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state.json"
+            self.assertEqual(load_human_reviews(state, []), {})
+            state.write_text(json.dumps({"schema_version": 1, "sources": []}), encoding="utf-8")
+            self.assertEqual(load_human_reviews(state, []), {})
+            state.write_text(json.dumps({"human_reviews": []}), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "Human Review"):
+                load_human_reviews(state, [])
+
+    def test_removing_or_replacing_pdf_drops_its_saved_review_choice(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old, kept, replacement = (root / name for name in ("old.pdf", "kept.pdf", "rescan.pdf"))
+            for source in (old, kept, replacement):
+                source.write_bytes(b"%PDF")
+            choices = {old: True, kept: False}
+            state = root / "state.json"
+            sources = sources_with_replacement([old, kept], 0, replacement)
+            save_queue_session(state, sources, 0, {}, {}, human_reviews=choices)
+            restored = load_human_reviews(state, sources)
+            self.assertEqual(restored, {kept: False})
+            self.assertIsNone(process_status_rows(sources, {}, restored)[0].human_review)
 
     def test_starting_new_queue_preserves_old_queue_and_years_save_independently(self):
         with tempfile.TemporaryDirectory() as directory:

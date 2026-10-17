@@ -103,6 +103,7 @@ class ProcessStatusRow:
     date_of_class: str
     pdf_number: int
     submitted: bool
+    human_review: bool | None = None
 
 
 def record_is_submitted(record: Mapping[str, Any]) -> bool:
@@ -126,15 +127,20 @@ def _status_class_date(item: Mapping[str, Any]) -> str:
 
 def process_status_rows(
         sources: Iterable[Path],
-        records: Mapping[Path, Any]) -> tuple[ProcessStatusRow, ...]:
+        records: Mapping[Path, Any],
+        human_reviews: Mapping[Path, bool] | None = None) -> tuple[ProcessStatusRow, ...]:
     """Follow the navigation queue and read each PDF's own displayed record."""
     rows = []
     for pdf_number, source in enumerate(sources, start=1):
         record = records.get(source)
         if not isinstance(record, Mapping):
             record = {}
+        submitted = record_is_submitted(record)
+        reviewed = (human_reviews or {}).get(source)
+        if not isinstance(reviewed, bool):
+            reviewed = True if submitted else None
         rows.append(ProcessStatusRow(
-            _status_class_date(record), pdf_number, record_is_submitted(record)))
+            _status_class_date(record), pdf_number, submitted, reviewed))
     return tuple(rows)
 
 
@@ -738,7 +744,8 @@ def create_startup_backup(*, backup_dir: Path, export_dir: Path,
 def save_gui_state(state_file: Path, sources: list[Path] | tuple[Path, ...],
                    current_index: int, records: Mapping[Path, Any],
                    failures: Mapping[Path, str], *,
-                   saved_queue: Path | None = None) -> Path:
+                   saved_queue: Path | None = None,
+                   human_reviews: Mapping[Path, bool] | None = None) -> Path:
     """Atomically persist the desktop queue without modifying any source PDF."""
     destination = state_file.expanduser().resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -751,6 +758,9 @@ def save_gui_state(state_file: Path, sources: list[Path] | tuple[Path, ...],
         "failures": {str(source.resolve()): str(message) for source, message in failures.items()
                      if source in sources},
         "saved_queue": str(saved_queue.expanduser().resolve()) if saved_queue else None,
+        "human_reviews": {str(source.resolve()): value
+                          for source, value in (human_reviews or {}).items()
+                          if source in sources and isinstance(value, bool)},
     }
     temporary = destination.with_suffix(destination.suffix + ".tmp")
     temporary.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -808,6 +818,27 @@ def load_gui_state(state_file: Path, *, require_all_sources: bool = False
     return sources, current_index, records, failures
 
 
+def load_human_reviews(state_file: Path, sources: Iterable[Path]) -> dict[Path, bool]:
+    """Load queue-local review choices without inventing completed OCR records."""
+    source = state_file.expanduser().resolve()
+    if not source.is_file():
+        return {}
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping):
+        raise ValueError("invalid GUI state file")
+    reviews = payload.get("human_reviews", {})
+    if not isinstance(reviews, Mapping):
+        raise ValueError("invalid Human Review choices in queue state")
+    result = {}
+    for candidate in sources:
+        value = reviews.get(str(candidate.resolve()))
+        if value is not None:
+            if not isinstance(value, bool):
+                raise ValueError(f"invalid Human Review choice for {candidate.name}")
+            result[candidate] = value
+    return result
+
+
 def load_saved_queue_path(state_file: Path) -> Path | None:
     """Read which named queue receives automatic saves for the current session."""
     source = state_file.expanduser().resolve()
@@ -830,14 +861,17 @@ def load_saved_queue_path(state_file: Path) -> Path | None:
 def save_queue_session(state_file: Path, sources: list[Path] | tuple[Path, ...],
                        current_index: int, records: Mapping[Path, Any],
                        failures: Mapping[Path, str], *,
-                       saved_queue: Path | None = None) -> Path:
+                       saved_queue: Path | None = None,
+                       human_reviews: Mapping[Path, bool] | None = None) -> Path:
     """Save the active named queue and the restart state using atomic replacements."""
     if saved_queue is not None:
         if saved_queue.expanduser().resolve() == state_file.expanduser().resolve():
             raise ValueError("Choose a queue filename different from the automatic restart state file")
-        save_gui_state(saved_queue, sources, current_index, records, failures)
+        save_gui_state(saved_queue, sources, current_index, records, failures,
+                       human_reviews=human_reviews)
     return save_gui_state(
-        state_file, sources, current_index, records, failures, saved_queue=saved_queue)
+        state_file, sources, current_index, records, failures, saved_queue=saved_queue,
+        human_reviews=human_reviews)
 
 
 def roster_table_rows(
