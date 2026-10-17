@@ -18,7 +18,7 @@ from fd_training_ocr.gui_controller import (GuiPaths, accept_stage3_suggestion, 
                                              discover_pdfs, export_record, index_after_removal,
                                              process_status_rows, ProcessStatusRow,
                                              structured_rows,
-                                             queue_index_for_page,
+                                             queue_index_for_page, sources_with_replacement,
                                              load_gui_state, load_saved_queue_path,
                                              save_gui_state, save_queue_session, unprocessed_sources,
                                              attendee_row_from_field, remove_attendee,
@@ -144,6 +144,44 @@ class GuiControllerTests(unittest.TestCase):
         self.assertEqual(index_after_removal(1, 2), 1)
         self.assertEqual(index_after_removal(2, 2), 1)
         self.assertEqual(index_after_removal(0, 0), -1)
+
+    def test_pdf_replacement_keeps_selected_slot_and_all_other_numbers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sources = [root / f"original-{number}.pdf" for number in range(3)]
+            replacement = root / "rescan.pdf"
+            for source in (*sources, replacement):
+                source.write_bytes(b"%PDF")
+            for slot in range(3):
+                with self.subTest(slot=slot):
+                    updated = sources_with_replacement(sources, slot, replacement)
+                    self.assertEqual(len(updated), len(sources))
+                    self.assertEqual(updated[slot], replacement.resolve())
+                    for other_slot in range(3):
+                        if other_slot != slot:
+                            self.assertEqual(updated[other_slot], sources[other_slot])
+                    self.assertEqual(sources[slot], root / f"original-{slot}.pdf")
+
+    def test_pdf_replacement_rejects_duplicate_or_missing_file_without_queue_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first, second = root / "first.pdf", root / "second.pdf"
+            first.write_bytes(b"%PDF first")
+            second.write_bytes(b"%PDF second")
+            sources = [first, second]
+            with self.assertRaisesRegex(ValueError, "another queue slot"):
+                sources_with_replacement(sources, 0, second)
+            with self.assertRaisesRegex(ValueError, "readable PDF"):
+                sources_with_replacement(sources, 0, root / "missing.pdf")
+            with self.assertRaisesRegex(ValueError, "loaded PDF"):
+                sources_with_replacement(sources, 2, first)
+            self.assertEqual(sources, [first, second])
+
+    def test_pdf_replacement_can_refresh_current_path_without_creating_duplicate_slot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "rescanned-in-place.pdf"
+            source.write_bytes(b"%PDF replacement")
+            self.assertEqual(sources_with_replacement([source], 0, source), [source.resolve()])
 
     def test_go_to_page_uses_one_based_pdf_numbers(self):
         self.assertEqual(queue_index_for_page(1, 10), 0)

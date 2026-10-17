@@ -23,7 +23,7 @@ from .gui_controller import (EVENT_SELECTIONS, GuiPaths, accept_stage3_suggestio
                              process_pdf, process_status_rows,
                              record_is_submitted, save_queue_session,
                              discover_pdfs, display_value, index_after_removal, structured_rows,
-                             queue_index_for_page,
+                             queue_index_for_page, sources_with_replacement,
                              attendee_row_from_field, remove_attendee, roster_table_rows,
                              add_attendee, first_available_attendee_row, save_roster_table,
                              import_fireworks_staff_ids,
@@ -269,6 +269,7 @@ def main(argv=None) -> int:
             self.open_queue_button = QtGui.QAction("Open Queue…", self)
             self.new_queue_button = QtGui.QAction("New Queue", self)
             self.remove_button = QtGui.QAction("Remove PDF", self)
+            self.replace_pdf_button = QtGui.QAction("Replace PDF…", self)
             self.remove_all_button = QtGui.QAction("Remove All", self)
             self.previous_button = QtWidgets.QPushButton("Previous")
             self.next_button = QtWidgets.QPushButton("Next")
@@ -312,13 +313,14 @@ def main(argv=None) -> int:
             self.add_menu_button = menu_tool(
                 "Add", (self.load_button, self.folder_button, self.roster_button))
             self.remove_menu_button = menu_tool(
-                "Remove", (self.remove_button, self.remove_all_button))
+                "Remove", (self.remove_button, self.replace_pdf_button, self.remove_all_button))
             self.process_menu_button = menu_tool(
                 "Process", (self.process_button, self.process_all_button,
                             self.process_status_button))
             self.attendees_menu_button = menu_tool(
                 "Attendees", (self.add_attendee_button, self.delete_attendee_button))
             self.remove_button.setEnabled(False)
+            self.replace_pdf_button.setEnabled(False)
             self.remove_all_button.setEnabled(False)
             self.save_queue_button.setEnabled(False)
             self.previous_button.setEnabled(False); self.next_button.setEnabled(False)
@@ -458,6 +460,7 @@ def main(argv=None) -> int:
             self.open_queue_button.triggered.connect(self.open_queue)
             self.new_queue_button.triggered.connect(self.new_queue)
             self.remove_button.triggered.connect(self.remove_current_pdf)
+            self.replace_pdf_button.triggered.connect(self.replace_current_pdf)
             self.remove_all_button.triggered.connect(self.remove_all_pdfs)
             self.previous_button.clicked.connect(lambda: self.navigate(-1))
             self.next_button.clicked.connect(lambda: self.navigate(1))
@@ -572,7 +575,8 @@ def main(argv=None) -> int:
             except (OSError, ValueError) as exc:
                 QtWidgets.QMessageBox.critical(self, "Unable to save queue", str(exc))
 
-        def replace_queue(self, sources, current_index, records, failures, saved_queue_path):
+        def replace_queue(self, sources, current_index, records, failures, saved_queue_path,
+                          *, preview_paths=None):
             previous = (self.sources, self.current_index, self.records,
                         self.failures, self.saved_queue_path)
             self.sources, self.current_index = sources, current_index
@@ -584,7 +588,7 @@ def main(argv=None) -> int:
                 (self.sources, self.current_index, self.records,
                  self.failures, self.saved_queue_path) = previous
                 raise
-            self.preview_paths.clear()
+            self.preview_paths = dict(preview_paths) if preview_paths is not None else {}
             self.update_queue_title()
             if self.current_index >= 0:
                 self.show_current()
@@ -959,6 +963,46 @@ def main(argv=None) -> int:
             except ValueError as exc:
                 QtWidgets.QMessageBox.warning(self, "Unable to go to PDF", str(exc))
 
+        def replace_current_pdf(self):
+            if (self.busy or self.fireworks_future is not None
+                    or not 0 <= self.current_index < len(self.sources)):
+                return
+            try:
+                old_source = self.sources[self.current_index]
+                pdf_number = self.current_index + 1
+                name, _filter = QtWidgets.QFileDialog.getOpenFileName(
+                    self, f"Replace PDF {pdf_number}", str(old_source.parent), "PDF files (*.pdf)")
+                if not name:
+                    return
+                sources = sources_with_replacement(
+                    self.sources, self.current_index, Path(name))
+                replacement = sources[self.current_index]
+                preview_dir = Path(tempfile.mkdtemp(
+                    prefix="replacement-", dir=self.preview_temp.name))
+                pages = render_pdf(replacement, preview_dir, dpi=300, pdftoppm=paths.pdftoppm)
+                if self.record is not None:
+                    self.save_formatted_request()
+                    automatic_export(self.record, args.export_dir)
+                self.formatted_request_timer.stop()
+                self.persist_state(raise_errors=True)
+                replaced_sources = {old_source, replacement}
+                records = {source: record for source, record in self.records.items()
+                           if source not in replaced_sources}
+                failures = {source: error for source, error in self.failures.items()
+                            if source not in replaced_sources}
+                previews = {source: image for source, image in self.preview_paths.items()
+                            if source not in replaced_sources}
+                previews[replacement] = pages[0].path
+                self.replace_queue(
+                    sources, self.current_index, records, failures, self.saved_queue_path,
+                    preview_paths=previews)
+                self.progress.setRange(0, 1)
+                self.progress.setValue(0)
+                self.status.setText(
+                    f"Replaced PDF {pdf_number} with {replacement.name} — run Process Selected")
+            except (OSError, ValueError, RuntimeError) as exc:
+                QtWidgets.QMessageBox.critical(self, "Unable to replace PDF", str(exc))
+
         def remove_current_pdf(self):
             if self.busy or not (0 <= self.current_index < len(self.sources)):
                 return
@@ -1047,6 +1091,7 @@ def main(argv=None) -> int:
             self.goto_number.setEnabled(idle and count > 0)
             self.goto_button.setEnabled(idle and count > 0)
             self.remove_button.setEnabled(idle and self.source is not None)
+            self.replace_pdf_button.setEnabled(idle and self.source is not None)
             self.remove_all_button.setEnabled(idle and bool(self.sources))
             self.save_queue_button.setEnabled(idle and bool(self.sources))
             self.open_queue_button.setEnabled(idle)
@@ -1070,7 +1115,7 @@ def main(argv=None) -> int:
                 (self.add_menu_button,
                  (self.load_button, self.folder_button, self.roster_button)),
                 (self.remove_menu_button,
-                 (self.remove_button, self.remove_all_button)),
+                 (self.remove_button, self.replace_pdf_button, self.remove_all_button)),
                 (self.process_menu_button,
                  (self.process_button, self.process_all_button,
                   self.process_status_button)),

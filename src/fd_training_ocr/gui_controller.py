@@ -67,6 +67,20 @@ def index_after_removal(removed_index: int, remaining_count: int) -> int:
     return min(removed_index, remaining_count - 1)
 
 
+def sources_with_replacement(sources: list[Path] | tuple[Path, ...],
+                              current_index: int, replacement: Path) -> list[Path]:
+    """Replace one queue slot without changing the order or number of other PDFs."""
+    if not 0 <= current_index < len(sources):
+        raise ValueError("Select a loaded PDF to replace")
+    selected = validate_pdf(replacement)
+    if any(source == selected for index, source in enumerate(sources)
+           if index != current_index):
+        raise ValueError("That PDF is already loaded in another queue slot")
+    result = list(sources)
+    result[current_index] = selected
+    return result
+
+
 def queue_index_for_page(page_number: int, queue_count: int) -> int:
     """Convert a user-facing one-based Go To page into a queue index."""
     if queue_count < 1:

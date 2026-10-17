@@ -147,6 +147,15 @@ PDFs in their existing locations. Opening a named queue reports missing PDFs ins
 silently dropping them and changing the numbering. Sorting the Status table never changes
 the saved queue order.
 
+To substitute a rescan while keeping the same PDF number, navigate to that document and
+choose **Remove > Replace PDF…**. The replacement stays in the current slot and all other
+PDF numbers stay the same. Its preview is checked before changing the queue. Previous OCR
+results, review edits, and errors are cleared from that slot so the replacement can be read
+with **Process Selected**. The old source PDF, its exported record, and submission receipts
+are preserved. Replacing a PDF already loaded in another slot is rejected. Changes save to
+the active named queue. Ordinary **Remove PDF** still closes the gap; adding a file appends
+it to the end rather than reinserting it into its old position.
+
 At startup the GUI snapshots exported JSON, roster, queue state, and configuration into an
 immutable dated and timed folder such as
 `C:\Temp\FDTrainingOCR-Backups\08-22-2026\19-42-10`. Every launch creates a recovery point;
