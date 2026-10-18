@@ -12,7 +12,7 @@ import base64
 import json
 import re
 from typing import Callable, Mapping, Protocol, Sequence
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
@@ -25,6 +25,10 @@ from .template import Region, TemplateDefinition
 
 class RecognitionError(RuntimeError):
     """A recognition request or response was unsafe or invalid."""
+
+
+class RecognitionServiceError(RecognitionError):
+    """A service/model failure that should not be retried for every field."""
 
 
 @dataclass(frozen=True)
@@ -276,31 +280,64 @@ class OllamaVisionProvider:
         self._transport = transport
 
     def recognize(self, request: RecognitionRequest) -> RecognitionResult:
-        raw = self._chat(request.prompt, request.image)
-        return parse_response(raw, request, self.name, self.model)
+        raw = self._chat(request.prompt, request.image, request_id=request.field_name,
+                         attempt=request.attempt)
+        try:
+            return parse_response(raw, request, self.name, self.model)
+        except RecognitionError as exc:
+            raise RecognitionError(
+                f"Ollama field {request.field_name} (model {self.model}, stage {request.attempt}): {exc}") from exc
 
-    def _chat(self, prompt: str, image: Image.Image, format_spec: object = "json") -> str:
+    def _chat(self, prompt: str, image: Image.Image, format_spec: object = "json", *,
+              request_id: str = "crop", attempt: int = 1) -> str:
         buffer = BytesIO()
         image.save(buffer, format="PNG")
         body = json.dumps({"model": self.model, "stream": False, "format": format_spec,
                            "messages": [{"role": "user", "content": prompt,
                                          "images": [base64.b64encode(buffer.getvalue()).decode("ascii")]}],
                            "options": {"temperature": 0}}).encode("utf-8")
+        context = f"Ollama request {request_id} (model {self.model}, attempt {attempt})"
         try:
             envelope = json.loads(self._transport(f"{self.endpoint}/api/chat", body,
                                                   self.timeout_seconds))
+            if isinstance(envelope, dict) and envelope.get("error"):
+                detail = str(envelope["error"])[:1500]
+                error_type = RecognitionError if "token repeat limit reached" in detail.casefold() else RecognitionServiceError
+                raise error_type(f"{context}: {detail}")
             raw = envelope["message"]["content"]
+        except HTTPError as exc:
+            # Read once, bounded; do not replace a model's real failure with setup advice.
+            try:
+                detail = exc.read(8192).decode("utf-8", errors="replace")
+            except OSError:
+                detail = "response body unavailable"
+            finally:
+                exc.close()
+            try:
+                response = json.loads(detail)
+                if isinstance(response, dict) and isinstance(response.get("error"), str):
+                    detail = response["error"]
+            except (ValueError, TypeError):
+                pass
+            message = f"{context}: HTTP {exc.code} {exc.reason}; {detail[:1500]}"
+            # Only the known crop-specific generation failure is recoverable here.
+            # Missing models, resource failures, and other HTTP errors fail promptly.
+            error_type = (RecognitionError if exc.code == 500 and
+                          "token repeat limit reached" in detail.casefold() else RecognitionServiceError)
+            raise error_type(message) from exc
         except (URLError, OSError) as exc:
-            raise RecognitionError("Ollama is unavailable. Install Ollama, start it, and pull the configured vision model.") from exc
+            raise RecognitionServiceError(f"{context}: could not reach local Ollama: {exc}") from exc
         except (json.JSONDecodeError, KeyError, TypeError) as exc:
-            raise RecognitionError("Ollama returned an invalid chat envelope") from exc
+            raise RecognitionError(f"{context}: Ollama returned an invalid chat envelope") from exc
         if not isinstance(raw, str):
-            raise RecognitionError("Ollama message content was not text")
+            raise RecognitionError(f"{context}: Ollama message content was not text")
         return raw
 
     def verify_context(self, request: ContextVerificationRequest) -> ContextVerificationResult:
         return parse_context_response(self._chat(request.prompt, request.image,
-                                                  _context_json_schema(request.schema)), request,
+                                                  _context_json_schema(request.schema),
+                                                  request_id=request.verification_id,
+                                                  attempt=request.attempt), request,
                                       self.name, self.model)
 
 
@@ -364,11 +401,60 @@ def parse_context_response(raw: str, request: ContextVerificationRequest,
         raw, provider, model, request.source_region, request.attempt)
 
 
+def _recognize_stage(page: Image.Image, request: RecognitionRequest,
+                     provider: RecognitionProvider, max_attempts: int
+                     ) -> tuple[RecognitionResult, dict[str, object]]:
+    """Retry only failed reads; keep one summary slot per independent stage."""
+    calls: list[dict[str, object]] = []
+    current = request
+    for number in range(1, max_attempts + 1):
+        try:
+            result = provider.recognize(current)
+        except RecognitionServiceError:
+            raise
+        except RecognitionError as exc:
+            calls.append({"attempt": number, "stage": request.attempt,
+                          "provider": provider.name, "model": provider.model,
+                          "variant": current.variant, "prompt": current.prompt,
+                          "source_region": list(current.source_region),
+                          "image_size": list(current.image.size), "error": str(exc)})
+            if number == max_attempts:
+                # No transcription was returned. Do not manufacture a raw JSON answer.
+                result = RecognitionResult(request.field_name, None, None, 0.0, (), "",
+                    provider.name, provider.model, current.source_region, current.variant)
+                item = _attempt_record(result, current)
+                item.update(error=str(exc), retry_attempts=calls)
+                return result, item
+            retry_number = number + 1
+            raw = page.crop(request.source_region).convert("L")
+            border = max(0, (request.image.width - raw.width) // 2) + 8 * number
+            crop = _padded(raw, border)
+            scale = min(float(retry_number), max(1.0, 2048 / max(crop.size)))
+            crop = crop.resize((round(crop.width * scale), round(crop.height * scale)),
+                               Image.Resampling.LANCZOS)
+            current = replace(request, image=crop, variant="raw_recovery",
+                prompt=request.prompt +
+                ' This field may be blank or contain only a printed rule. If there are no legible '
+                'handwritten characters, return {"value":null,"confidence":0.0,"alternatives":[]} '
+                'exactly. Do not copy printed labels or fill from nearby rows.')
+        else:
+            item = _attempt_record(result, current)
+            if calls:
+                call = dict(item)
+                call.update(attempt=number, image_size=list(current.image.size))
+                calls.append(call)
+                item["retry_attempts"] = calls
+            return result, item
+    raise AssertionError("recognition stage must run at least once")
+
+
 def recognize_fields(page: Image.Image, master: Image.Image,
                      template: TemplateDefinition, provider: RecognitionProvider,
                      populated_rows: Sequence[int] = (), *, crop_padding: int = 12,
                      max_attempts: int = 3) -> tuple[RecognitionResult, ...]:
-    """Run two independent reads of every eligible non-signature handwriting field."""
+    """Run two independent reads, with bounded failed-read recovery per stage."""
+    if isinstance(max_attempts, bool) or not isinstance(max_attempts, int) or not 1 <= max_attempts <= 3:
+        raise ValueError("max_attempts must be an integer from 1 to 3")
     populated = set(populated_rows)
     results = []
     for region in template.regions:
@@ -387,8 +473,8 @@ def recognize_fields(page: Image.Image, master: Image.Image,
             request = make_request(page, region, master, padding=padding, expand=expand,
                                    force_variant=variant, attempt=number, stronger=stronger,
                                    independent_second=independent)
-            result = provider.recognize(request)
-            attempts.append(_attempt_record(result, request))
+            result, stage = _recognize_stage(page, request, provider, max_attempts)
+            attempts.append(stage)
         assert result is not None
         # Stage 1 remains the raw machine transcription; later stages select without overwriting it.
         first = attempts[0]

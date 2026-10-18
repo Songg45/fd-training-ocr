@@ -4,7 +4,8 @@ import unittest
 from PIL import Image, ImageDraw
 
 from fd_training_ocr.recognition import (ContextVerificationRequest, MockRecognitionProvider,
-    RecognitionError, RecognitionResult, parse_context_response)
+    RecognitionError, RecognitionResult, RecognitionServiceError, parse_context_response,
+    recognize_fields)
 from fd_training_ocr.second_pass import verify_second_pass
 from fd_training_ocr.template import Region, TemplateDefinition
 from fd_training_ocr.validation import Roster, RosterMember, ValidationPolicy, validate
@@ -57,6 +58,48 @@ class ContextParserTests(unittest.TestCase):
 
 
 class SecondPassTests(unittest.TestCase):
+    def test_stage3_can_recover_after_one_primary_stage_exhausted_its_retries(self):
+        class PartialProvider(MockRecognitionProvider):
+            def recognize(self, request):
+                if request.field_name == "description" and request.attempt == 1:
+                    self.requests.append(request)
+                    raise RecognitionError("prediction aborted, token repeat limit reached")
+                return super().recognize(request)
+        small_template = TemplateDefinition("test", "v1", "normalized_xywh", (1000, 1000),
+            frozenset({"signature"}), {}, (template().region("description"),))
+        provider = PartialProvider({"description": {
+            "value": "Ladder training", "confidence": .99, "alternatives": []}},
+            {"description": {"value": "Ladder training", "alternatives": {"value": []}}})
+        page = Image.new("L", (1000, 1000), 255)
+        first = recognize_fields(page, page, small_template, provider)
+        verified = verify_second_pass(page, small_template, provider, first, validate(first))
+        self.assertIsNone(first[0].value)
+        self.assertIn("error", first[0].attempts[0])
+        self.assertEqual(first[0].attempts[1]["value"], "Ladder training")
+        resolution = verified.resolutions["description"]
+        self.assertEqual(resolution.resolved_value, "Ladder training")
+        self.assertFalse(resolution.review_required)
+        self.assertIn("independent pass and contextual pass agree", resolution.resolution_reason)
+
+    def test_stage3_repeat_failures_remain_reviewable_but_service_failures_stop_promptly(self):
+        class FailingContextProvider(MockRecognitionProvider):
+            error = RecognitionError
+            def verify_context(self, request):
+                self.context_requests.append(request)
+                raise self.error("model request failed")
+        page = Image.new("L", (1000, 1000), 255)
+        first = (result("description", None, confidence=0),)
+        provider = FailingContextProvider()
+        verified = verify_second_pass(page, template(), provider, first, validate(first))
+        self.assertEqual(verified.call_count, 2)
+        self.assertTrue(verified.resolutions["description"].review_required)
+        self.assertIsNone(verified.resolutions["description"].resolved_value)
+        provider.context_requests.clear()
+        provider.error = RecognitionServiceError
+        with self.assertRaises(RecognitionServiceError):
+            verify_second_pass(page, template(), provider, first, validate(first))
+        self.assertEqual(len(provider.context_requests), 1)
+
     def test_exact_unit_id_resolves_mismatched_name_from_roster_without_model_call(self):
         roster = Roster((RosterMember("Nick Sledge", ("4354",), ("Nicholas Sledge",)),))
         first = (result("attendee.01.unit_id", "4354"),

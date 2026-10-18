@@ -179,6 +179,10 @@ def validate(results: Iterable[RecognitionResult], *, roster: Roster | None = No
         threshold = policy.confidence_thresholds.get(result.field_name, policy.confidence_thresholds.get(result.field_name.rsplit(".", 1)[-1], policy.confidence_thresholds["default"]))
         if result.confidence < threshold: warnings.append(f"confidence {result.confidence:.2f} is below {threshold:.2f}")
         if result.alternatives: warnings.append("recognizer supplied alternatives")
+        for stage in result.attempts:
+            if stage.get("error"):
+                warnings.append(f"OCR stage {stage.get('stage', '?')} failed after "
+                    f"{len(stage.get('retry_attempts', ())) or 1} attempt(s): {stage['error']}")
         suggestion, ambiguous, reason = None, False, None
         if roster and result.value and (result.field_name.endswith(".print_name") or result.field_name == "instructor"):
             exact, _ = roster.match_name(result.value)

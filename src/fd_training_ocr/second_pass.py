@@ -13,7 +13,8 @@ from PIL import Image
 from .normalization import (normalize_aliased_allowlisted, normalize_date, normalize_hours,
                             normalize_time)
 from .recognition import (ContextVerificationRequest, ContextVerificationResult,
-                          RecognitionError, RecognitionProvider, RecognitionResult)
+                          RecognitionError, RecognitionProvider, RecognitionResult,
+                          RecognitionServiceError)
 from .template import Region, TemplateDefinition
 from .validation import FieldAssessment, Roster, ValidationPolicy, ValidationReport
 
@@ -79,6 +80,8 @@ def _verify(provider: RecognitionProvider, request: ContextVerificationRequest
             item = _attempt(result); item["stage"] = 3; item["prompt"] = current.prompt
             attempts.append(item)
             return result, tuple(attempts)
+        except RecognitionServiceError:
+            raise
         except RecognitionError as exc:
             attempts.append({"attempt": number, "stage": 3, "prompt": current.prompt,
                              "provider": provider.name, "model": provider.model,

@@ -314,9 +314,13 @@ the adapter uses deterministic temperature and strict JSON parsing.
 
 Each eligible field produces raw-grayscale and printed-rule-suppressed candidates.
 Suppression is selected only when a measured ink-preservation threshold passes. Crops
-receive a white border, and invalid or low-confidence structured results are retried
-sequentially with raw and then wider raw context (three attempts maximum). Detailed JSON
-records preserve the chosen variant and every attempt. Roster matching is non-destructive:
+receive a white border. A failed request or malformed response is retried only for that
+field/stage, using a raw crop with a different border/resolution and explicit blank-field
+instructions. Recovery never enlarges the source box into another row, supplies an earlier
+answer to the independent reader, or disables Ollama's repetition safeguard.
+`recognition_max_attempts` limits each of Stages 1 and 2 to 1–3 calls, including the initial
+call (default 3); successful reads are not retried. Detailed JSON preserves one summary
+slot per stage, with any recovery calls/errors nested under `retry_attempts`. Roster matching is non-destructive:
 raw OCR remains machine output while a canonical suggestion, ambiguity flag, and reason
 are exposed for human review.
 
@@ -329,6 +333,22 @@ cells together. Attendee context stops at the excluded-column boundary. Every st
 crop variant, prompt, response, provider/model, candidate, resolved value, and reason
 remain in detailed JSON. Automatic resolution requires two independent agreeing signals
 plus deterministic validation; contradictions or malformed output remain review-required.
+
+If a field exhausts its retries, its missing transcription is represented as null with
+zero confidence and a field warning. The other fields still finish, and the existing
+Stage 3 rules can recover the value from corroborating evidence. Otherwise it remains
+unresolved for human review, and the document is saved/exported as review-required rather
+than discarded. A blank response is not replaced with a neighboring attendee's ID; existing
+same-row roster reconciliation still applies when that row has a unique matching name.
+
+Ollama HTTP errors include the field/context ID, model, status, and bounded server error
+body in the diagnostics. In particular, HTTP 500 `prediction aborted, token repeat limit
+reached` means generation failed for that crop, not that Ollama needs installing or the
+timeout needs increasing. This crop-specific error is recoverable. Connection failures,
+missing models, out-of-memory errors, and other service-level HTTP failures still stop
+the document promptly with their actual error instead of retrying every field. All
+recovery calls described here are local OCR requests, not training-record submissions;
+the single-attempt submission/receipt safeguards are unchanged.
 
 An opt-in smoke test is available with `FD_OCR_LIVE_OLLAMA=1`; optionally set
 `FD_OCR_OLLAMA_MODEL`. It skips with setup guidance if the service/model is unavailable.
